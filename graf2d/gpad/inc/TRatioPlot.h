@@ -148,7 +148,8 @@ protected:
    void SetPadMargins();
    void CreateGridlines();
    void UpdateGridlines();
-   Int_t BuildLowerPlot();
+   Int_t BuildLowerPlots();
+   TGraph *BuildLowerPlot(TH1 *h1, TH1 *h2, TGraphErrors *ConfidenceInterval1, TGraphErrors *ConfidenceInterval2);
 
    void ImportAxisAttributes(TGaxis* gaxis, TAxis* axis);
 

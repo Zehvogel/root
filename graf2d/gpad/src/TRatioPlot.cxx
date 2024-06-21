@@ -169,7 +169,8 @@ void TRatioPlot::Init(TH1* h1, TH1* h2, Option_t *option)
 
 
    // build ratio, everything is ready
-   if (!BuildLowerPlot()) return;
+   if (!BuildLowerPlots())
+      return;
 
    // taking x axis information from h1 by cloning it x axis
    fSharedXAxis = static_cast<TAxis *>(fH1->GetXaxis()->Clone());
@@ -292,7 +293,8 @@ TRatioPlot::TRatioPlot(TH1 *h1, Option_t *option, TFitResult *fitres)
 
    fOption = optionString;
 
-   if (!BuildLowerPlot()) return;
+   if (!BuildLowerPlots())
+      return;
 
    // emulate option behaviour of TH1
    if (fH1->GetSumw2N() > 0) {
@@ -874,9 +876,9 @@ void TRatioPlot::SyncAxesRanges()
 /// Build the lower plot according to which constructor was called, and
 /// which options were passed.
 
-Int_t TRatioPlot::BuildLowerPlot()
+Int_t TRatioPlot::BuildLowerPlots()
 {
-   static const char *thisMethod = "BuildLowerPlot";
+   static const char *thisMethod = "BuildLowerPlots";
 
    // Clear and delete the graph if not exists
    if (fRatioGraph) {
@@ -890,9 +892,35 @@ Int_t TRatioPlot::BuildLowerPlot()
    if (!fConfidenceInterval2)
       fConfidenceInterval2 = new TGraphErrors();
 
+   // TODO: call BuildLowerPlot as many times as necessary
+   // start with once and then validate that everything still works
+   fRatioGraph = BuildLowerPlot(fH1, fH2, fConfidenceInterval1, fConfidenceInterval2);
+
+   // need to set back to "" since recreation. we don't ever want
+   // title on lower graph
+
+   if (!fRatioGraph) {
+      Error(thisMethod, "Error creating lower graph");
+      return 0;
+   }
+
+   fRatioGraph->SetTitle("");
+   fConfidenceInterval1->SetTitle("");
+   fConfidenceInterval2->SetTitle("");
+
+   return 1;
+}
+
+TGraph *
+TRatioPlot::BuildLowerPlot(TH1 *h1, TH1 *h2, TGraphErrors *ConfidenceInterval1, TGraphErrors *ConfidenceInterval2)
+{
+   static const char *thisMethod = "BuildLowerPlot";
+
    static Double_t divideGridlines[] = {0.7, 1.0, 1.3};
    static Double_t diffGridlines[] = {0.0};
    static Double_t signGridlines[] = {1.0, 0.0, -1.0};
+
+   TGraph *resultRatioGraph = nullptr;
 
    // Determine the divide mode and create the lower graph accordingly
    // Pass divide options given in constructor
@@ -901,15 +929,15 @@ Int_t TRatioPlot::BuildLowerPlot()
 
       SetGridlines(divideGridlines, 3);
 
-      TH1 *tmpH1 = static_cast<TH1 *>(fH1->Clone());
-      TH1 *tmpH2 = static_cast<TH1 *>(fH2->Clone());
+      TH1 *tmpH1 = static_cast<TH1 *>(h1->Clone());
+      TH1 *tmpH2 = static_cast<TH1 *>(h2->Clone());
 
       tmpH1->Scale(fC1);
       tmpH2->Scale(fC2);
 
       TGraphAsymmErrors *ratioGraph = new TGraphAsymmErrors();
       ratioGraph->Divide(tmpH1, tmpH2, fOption.Data());
-      fRatioGraph = ratioGraph;
+      resultRatioGraph = ratioGraph;
 
       delete tmpH1;
       delete tmpH2;
@@ -917,30 +945,30 @@ Int_t TRatioPlot::BuildLowerPlot()
    } else if (fMode == CalculationMode::kDifference) {
       SetGridlines(diffGridlines, 3);
 
-      TH1 *tmpHist = static_cast<TH1 *>(fH1->Clone());
+      TH1 *tmpHist = static_cast<TH1 *>(h1->Clone());
 
       tmpHist->Reset();
 
-      tmpHist->Add(fH1, fH2, fC1, -1*fC2);
-      fRatioGraph = new TGraphErrors(tmpHist);
+      tmpHist->Add(h1, h2, fC1, -1 * fC2);
+      resultRatioGraph = new TGraphErrors(tmpHist);
 
       delete tmpHist;
    } else if (fMode == CalculationMode::kDifferenceSign) {
 
       SetGridlines(signGridlines, 3);
 
-      fRatioGraph = new TGraphAsymmErrors();
+      resultRatioGraph = new TGraphAsymmErrors();
       Int_t ipoint = 0;
 
-      for (Int_t i = 0; i <= fH1->GetNbinsX(); ++i) {
-         Double_t val = fH1->GetBinContent(i);
-         Double_t val2 = fH2->GetBinContent(i);
+      for (Int_t i = 0; i <= h1->GetNbinsX(); ++i) {
+         Double_t val = h1->GetBinContent(i);
+         Double_t val2 = h2->GetBinContent(i);
          Double_t error = 0.;
 
          if (fErrorMode == ErrorMode::kErrorAsymmetric) {
 
-            Double_t errUp = fH1->GetBinErrorUp(i);
-            Double_t errLow = fH1->GetBinErrorLow(i);
+            Double_t errUp = h1->GetBinErrorUp(i);
+            Double_t errLow = h1->GetBinErrorLow(i);
 
             if (val - val2 > 0) {
                // h1 > h2
@@ -951,7 +979,7 @@ Int_t TRatioPlot::BuildLowerPlot()
             }
 
          } else if (fErrorMode == ErrorMode::kErrorSymmetric) {
-            error = fH1->GetBinError(i);
+            error = h1->GetBinError(i);
          } else {
             Warning(thisMethod, "error mode is invalid");
          }
@@ -960,8 +988,9 @@ Int_t TRatioPlot::BuildLowerPlot()
 
             Double_t res = (val - val2) / error;
 
-            ((TGraphAsymmErrors*)fRatioGraph)->SetPoint(ipoint, fH1->GetBinCenter(i), res);
-            ((TGraphAsymmErrors*)fRatioGraph)->SetPointError(ipoint,  fH1->GetBinWidth(i)/2., fH1->GetBinWidth(i)/2., 0.5, 0.5);
+            ((TGraphAsymmErrors *)resultRatioGraph)->SetPoint(ipoint, h1->GetBinCenter(i), res);
+            ((TGraphAsymmErrors *)resultRatioGraph)
+               ->SetPointError(ipoint, h1->GetBinWidth(i) / 2., h1->GetBinWidth(i) / 2., 0.5, 0.5);
 
             ++ipoint;
 
@@ -972,24 +1001,24 @@ Int_t TRatioPlot::BuildLowerPlot()
 
       SetGridlines(signGridlines, 3);
 
-      TF1 *func = dynamic_cast<TF1*>(fH1->GetListOfFunctions()->At(0));
+      TF1 *func = dynamic_cast<TF1 *>(h1->GetListOfFunctions()->At(0));
 
       if (!func) {
          // this is checked in constructor and should thus not occur
          Error(thisMethod, "h1 does not have a fit function");
-         return 0;
+         return nullptr;
       }
 
-      fRatioGraph = new TGraphAsymmErrors();
+      resultRatioGraph = new TGraphAsymmErrors();
       Int_t ipoint = 0;
 
       std::vector<double> ci1, ci2;
 
-      Int_t nbinsx = fH1->GetNbinsX();
+      Int_t nbinsx = h1->GetNbinsX();
 
       std::vector<Double_t> x_arr(nbinsx, 0.), ci_arr1(nbinsx, 0.), ci_arr2(nbinsx, 0);
       for (Int_t i = 0; i < nbinsx; ++i)
-         x_arr[i] = fH1->GetBinCenter(i+1);
+         x_arr[i] = h1->GetBinCenter(i + 1);
 
       Double_t cl1 = fCl1, cl2 = fCl2;
 
@@ -1013,16 +1042,16 @@ Int_t TRatioPlot::BuildLowerPlot()
       }
 
       for (Int_t i = 1; i <= nbinsx; ++i) {
-         Double_t val = fH1->GetBinContent(i);
-         Double_t x = fH1->GetBinCenter(i);
+         Double_t val = h1->GetBinContent(i);
+         Double_t x = h1->GetBinCenter(i);
          Double_t error = 0.;
 
          if (fErrorMode == ErrorMode::kErrorAsymmetric) {
 
-            Double_t errUp = fH1->GetBinErrorUp(i);
-            Double_t errLow = fH1->GetBinErrorLow(i);
+            Double_t errUp = h1->GetBinErrorUp(i);
+            Double_t errLow = h1->GetBinErrorLow(i);
 
-            if (val - func->Eval(fH1->GetBinCenter(i)) > 0) {
+            if (val - func->Eval(h1->GetBinCenter(i)) > 0) {
                // h1 > fit
                error = errLow;
             } else {
@@ -1032,7 +1061,7 @@ Int_t TRatioPlot::BuildLowerPlot()
 
          } else if (fErrorMode == ErrorMode::kErrorSymmetric) {
 
-            error = fH1->GetBinError(i);
+            error = h1->GetBinError(i);
 
          } else if (fErrorMode == ErrorMode::kErrorFunc) {
 
@@ -1046,15 +1075,16 @@ Int_t TRatioPlot::BuildLowerPlot()
 
          if (error != 0.) {
 
-            Double_t res = (fH1->GetBinContent(i) - func->Eval(fH1->GetBinCenter(i))) / error;
+            Double_t res = (h1->GetBinContent(i) - func->Eval(h1->GetBinCenter(i))) / error;
 
-            ((TGraphAsymmErrors*)fRatioGraph)->SetPoint(ipoint, fH1->GetBinCenter(i), res);
-            ((TGraphAsymmErrors*)fRatioGraph)->SetPointError(ipoint,  fH1->GetBinWidth(i)/2., fH1->GetBinWidth(i)/2., 0.5, 0.5);
+            ((TGraphAsymmErrors *)resultRatioGraph)->SetPoint(ipoint, h1->GetBinCenter(i), res);
+            ((TGraphAsymmErrors *)resultRatioGraph)
+               ->SetPointError(ipoint, h1->GetBinWidth(i) / 2., h1->GetBinWidth(i) / 2., 0.5, 0.5);
 
-            fConfidenceInterval1->SetPoint(ipoint, x, 0);
-            fConfidenceInterval1->SetPointError(ipoint, x, i <= (Int_t)ci1.size() ? ci1[i-1] / error : 0);
-            fConfidenceInterval2->SetPoint(ipoint, x, 0);
-            fConfidenceInterval2->SetPointError(ipoint, x, i <= (Int_t)ci2.size() ? ci2[i-1] / error : 0);
+            ConfidenceInterval1->SetPoint(ipoint, x, 0);
+            ConfidenceInterval1->SetPointError(ipoint, x, i <= (Int_t)ci1.size() ? ci1[i - 1] / error : 0);
+            ConfidenceInterval2->SetPoint(ipoint, x, 0);
+            ConfidenceInterval2->SetPointError(ipoint, x, i <= (Int_t)ci2.size() ? ci2[i - 1] / error : 0);
 
             ++ipoint;
 
@@ -1064,32 +1094,20 @@ Int_t TRatioPlot::BuildLowerPlot()
       SetGridlines(divideGridlines, 3);
 
       // Use TH1's Divide method
-      TH1 *tmpHist = static_cast<TH1 *>(fH1->Clone());
+      TH1 *tmpHist = static_cast<TH1 *>(h1->Clone());
       tmpHist->Reset();
 
-      tmpHist->Divide(fH1, fH2, fC1, fC2, fOption.Data());
-      fRatioGraph = new TGraphErrors(tmpHist);
+      tmpHist->Divide(h1, h2, fC1, fC2, fOption.Data());
+      resultRatioGraph = new TGraphErrors(tmpHist);
 
       delete tmpHist;
    } else {
       // this should not occur
       Error(thisMethod, "Invalid fMode value");
-      return 0;
+      return nullptr;
    }
 
-   // need to set back to "" since recreation. we don't ever want
-   // title on lower graph
-
-   if (!fRatioGraph) {
-      Error(thisMethod, "Error creating lower graph");
-      return 0;
-   }
-
-   fRatioGraph->SetTitle("");
-   fConfidenceInterval1->SetTitle("");
-   fConfidenceInterval2->SetTitle("");
-
-   return 1;
+   return resultRatioGraph;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1619,7 +1637,8 @@ void TRatioPlot::SetConfidenceLevels(Double_t c1, Double_t c2)
 {
    fCl1 = c1;
    fCl2 = c2;
-   if (!BuildLowerPlot()) return;
+   if (!BuildLowerPlots())
+      return;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
