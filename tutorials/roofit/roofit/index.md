@@ -145,9 +145,9 @@ Explore the tutorials below to discover the main features of RooFit. A more inde
 | **Tutorial** || **Description** |
 |------|--------|-----------------|
 | rf801_mcstudy.C| rf801_mcstudy.py | Toy Monte Carlo study that perform cycles of event generation and fitting.|
-| rf802_mcstudy_addons.C| | RooMCStudy - using separate fit and generator models, using the chi^2 calculator model. Running a biased fit model against an optimal fit.|
-| rf803_mcstudy_addons2.C| | RooMCStudy - Using the randomizer and profile likelihood add-on models.|
-| rf804_mcstudy_constr.C| | Using RooMCStudy on models with constrains.|
+| rf802_mcstudy_addons.C| rf802_mcstudy_addons.py | RooMCStudy - using separate fit and generator models, using the chi^2 calculator model. Running a biased fit model against an optimal fit.|
+| rf803_mcstudy_addons2.C| rf803_mcstudy_addons2.py | RooMCStudy - Using the randomizer and profile likelihood add-on models.|
+| rf804_mcstudy_constr.C| rf804_mcstudy_constr.py | Using RooMCStudy on models with constrains.|
 
 
 \anchor roofit_numeric_algorithm_tuning
