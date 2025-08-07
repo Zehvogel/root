@@ -77,7 +77,7 @@ mcs.addModule(sigModule)
 # Run manager, make plots
 # ---------------------------------------------
 
-# Run 1000 experiments. ROOT.This configuration will generate a fair number
+# Run 500 experiments. ROOT.This configuration will generate a fair number
 # of (harmless) MINUIT warnings due to the instability of the Chebychev polynomial fit
 # at low statistics.
 mcs.generateAndFit(500)
