@@ -53,7 +53,7 @@ void rf802_mcstudy_addons()
    RooChi2MCSModule chi2mod;
    mcs->addModule(chi2mod);
 
-   // Generate 1000 samples of 1000 events
+   // Generate 2000 samples of 1000 events
    mcs->generateAndFit(2000, 1000);
 
    // Number of bins for chi2 plots
