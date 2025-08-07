@@ -88,7 +88,7 @@ void rf803_mcstudy_addons2()
    // R u n   m a n a g e r ,   m a k e   p l o t s
    // ---------------------------------------------
 
-   // Run 1000 experiments. This configuration will generate a fair number
+   // Run 500 experiments. This configuration will generate a fair number
    // of (harmless) MINUIT warnings due to the instability of the Chebychev polynomial fit
    // at low statistics.
    mcs->generateAndFit(500);
