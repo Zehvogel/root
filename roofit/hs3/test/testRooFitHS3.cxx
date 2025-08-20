@@ -342,6 +342,27 @@ TEST(RooFitHS3, RooMultiVarGaussian)
    EXPECT_EQ(status, 0);
 }
 
+TEST(RooFitHS3, RooMultiVarGaussianParametric)
+{
+   // To silence the numeric differentiation
+   RooHelpers::LocalChangeMsgLevel changeMsgLvl(RooFit::WARNING);
+
+   using RooFit::RooConst;
+
+   RooRealVar x{"x", "x", 0, 10};
+   RooRealVar y{"y", "y", 0, 10};
+   RooRealVar mean{"mean", "mean", 3};
+   
+   // Test parametric covariance matrix
+   RooRealVar cov_00{"cov_00", "cov_00", 1.0};
+   RooRealVar cov_01{"cov_01", "cov_01", 0.2};
+   RooRealVar cov_11{"cov_11", "cov_11", 1.0};
+   
+   RooMultiVarGaussian multiVarGaussParam{"multi_var_gauss_param", "", {x, y}, {mean, RooConst(5.0)}, {cov_00, cov_01, cov_11}};
+   int status = validate(multiVarGaussParam);
+   EXPECT_EQ(status, 0);
+}
+
 TEST(RooFitHS3, RooPoisson)
 {
    int status = 0;

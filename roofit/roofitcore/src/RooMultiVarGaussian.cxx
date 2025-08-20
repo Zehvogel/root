@@ -301,6 +301,7 @@ Int_t RooMultiVarGaussian::getAnalyticalIntegral(RooArgSet& allVarsIn, RooArgSet
   BitBlock bits ;
   bool anyBits(false) ;
   syncMuVec() ;
+  syncCovMatrix() ; // Update covariance matrix if parametric
   for (std::size_t i=0 ; i<_x.size() ; i++) {
 
     // Check if integration over observable #i is requested
@@ -364,6 +365,7 @@ Int_t RooMultiVarGaussian::getAnalyticalIntegral(RooArgSet& allVarsIn, RooArgSet
 
 double RooMultiVarGaussian::analyticalIntegral(Int_t code, const char* /*rangeName*/) const
 {
+  syncCovMatrix() ; // Update covariance matrix if parametric
   if (code==-1) {
     return pow(2*3.14159268,_x.size()/2.)*sqrt(std::abs(_det)) ;
   }
@@ -393,7 +395,7 @@ double RooMultiVarGaussian::analyticalIntegral(Int_t code, const char* /*rangeNa
 RooMultiVarGaussian::AnaIntData& RooMultiVarGaussian::anaIntData(Int_t code) const
 {
   map<int,AnaIntData>::iterator iter =  _anaIntCache.find(code) ;
-  if (iter != _anaIntCache.end()) {
+  if (iter != _anaIntCache.end() && !_covIsParametric) {
     return iter->second ;
   }
 
@@ -576,9 +578,11 @@ void RooMultiVarGaussian::generateEvent(Int_t code)
 
 RooMultiVarGaussian::GenData& RooMultiVarGaussian::genData(Int_t code) const
 {
-  // Check if cache entry was previously created
+  syncCovMatrix() ; // Update covariance matrix if parametric
+  
+  // Check if cache entry was previously created (but don't use cache for parametric covariance)
   map<int,GenData>::iterator iter =  _genCache.find(code) ;
-  if (iter != _genCache.end()) {
+  if (iter != _genCache.end() && !_covIsParametric) {
     return iter->second ;
   }
 
