@@ -12,6 +12,7 @@ project.xcworkspace
 .vs/
 .vscode
 .build
+build/
 
 # CLion
 .idea/*
