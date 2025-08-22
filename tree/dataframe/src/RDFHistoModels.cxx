@@ -20,6 +20,7 @@
 #include "TH2.h"
 #include "TH3.h"
 #include "THn.h"
+#include "THnSparse.h"
 
 /**
  * \class ROOT::RDF::TH1DModel
@@ -43,6 +44,12 @@
  * \class ROOT::RDF::THnDModel
  * \ingroup dataframe
  * \brief A struct which stores some basic parameters of a THnD
+ * \note It stores only basic settings such as name, title, bins, bin edges,
+ * but not others such as fSumw2.
+ *
+ * \class ROOT::RDF::THnSparseModel
+ * \ingroup dataframe
+ * \brief A struct which stores some basic parameters of a THnSparse
  * \note It stores only basic settings such as name, title, bins, bin edges,
  * but not others such as fSumw2.
  *
@@ -294,6 +301,88 @@ std::shared_ptr<::THnD> THnDModel::GetHistogram() const
    return h;
 }
 THnDModel::~THnDModel() {}
+
+THnSparseModel::THnSparseModel(const ::THnSparse &h)
+   : fName(h.GetName()), fTitle(h.GetTitle()), fDim(h.GetNdimensions()), fNbins(fDim), fXmin(fDim), fXmax(fDim),
+     fBinEdges(fDim)
+{
+   for (int idim = 0; idim < fDim; ++idim) {
+      fNbins[idim] = h.GetAxis(idim)->GetNbins();
+      SetAxisProperties(h.GetAxis(idim), fXmin[idim], fXmax[idim], fBinEdges[idim]);
+   }
+}
+
+THnSparseModel::THnSparseModel(const char *name, const char *title, int dim, const int *nbins, const double *xmin,
+                     const double *xmax)
+   : fName(name), fTitle(title), fDim(dim), fBinEdges(dim)
+{
+   fNbins.reserve(fDim);
+   fXmin.reserve(fDim);
+   fXmax.reserve(fDim);
+   for (int idim = 0; idim < fDim; ++idim) {
+      fNbins.push_back(nbins[idim]);
+      fXmin.push_back(xmin[idim]);
+      fXmax.push_back(xmax[idim]);
+   }
+}
+
+THnSparseModel::THnSparseModel(const char *name, const char *title, int dim, const std::vector<int> &nbins,
+                     const std::vector<double> &xmin, const std::vector<double> &xmax)
+   : fName(name), fTitle(title), fDim(dim), fNbins(nbins), fXmin(xmin), fXmax(xmax), fBinEdges(dim)
+{
+}
+
+THnSparseModel::THnSparseModel(const char *name, const char *title, int dim, const int *nbins,
+                     const std::vector<std::vector<double>> &xbins)
+   : fName(name), fTitle(title), fDim(dim), fXmin(dim, 0.), fXmax(dim, 64.), fBinEdges(xbins)
+{
+   fNbins.reserve(fDim);
+   for (int idim = 0; idim < fDim; ++idim) {
+      fNbins.push_back(nbins[idim]);
+   }
+}
+
+THnSparseModel::THnSparseModel(const char *name, const char *title, int dim, const std::vector<int> &nbins,
+                     const std::vector<std::vector<double>> &xbins)
+   : fName(name), fTitle(title), fDim(dim), fNbins(nbins), fXmin(dim, 0.), fXmax(dim, 64.), fBinEdges(xbins)
+{
+}
+
+std::shared_ptr<::THnSparse> THnSparseModel::GetHistogram() const
+{
+   bool varbinning = false;
+   for (const auto &bins : fBinEdges) {
+      if (!bins.empty()) {
+         varbinning = true;
+         break;
+      }
+   }
+   std::shared_ptr<::THnSparse> h;
+   if (varbinning) {
+      // For variable binning, create TAxis objects and use std::vector<TAxis> constructor
+      std::vector<TAxis> axes;
+      axes.reserve(fDim);
+      for (int idim = 0; idim < fDim; ++idim) {
+         if (!fBinEdges[idim].empty()) {
+            // Variable binning for this axis
+            TAxis axis(fBinEdges[idim].size() - 1, fBinEdges[idim].data());
+            axis.SetName(TString::Format("axis%d", idim));
+            axes.push_back(axis);
+         } else {
+            // Fixed binning for this axis
+            TAxis axis(fNbins[idim], fXmin[idim], fXmax[idim]);
+            axis.SetName(TString::Format("axis%d", idim));
+            axes.push_back(axis);
+         }
+      }
+      h = std::make_shared<::THnSparseD>(fName, fTitle, axes);
+   } else {
+      h = std::make_shared<::THnSparseD>(fName, fTitle, fDim, fNbins.data(), fXmin.data(), fXmax.data());
+   }
+   return h;
+}
+
+THnSparseModel::~THnSparseModel() {}
 
 // Profiles
 

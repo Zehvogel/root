@@ -22,6 +22,10 @@ class THnT;
 using THnD = THnT<double>;
 class TProfile;
 class TProfile2D;
+class TArrayD;
+template <class CONT>
+class THnSparseT;
+using THnSparseD = THnSparseT<TArrayD>;
 
 namespace ROOT {
 
@@ -121,6 +125,30 @@ struct THnDModel {
    THnDModel(const char *name, const char *title, int dim, const std::vector<int> &nbins,
              const std::vector<std::vector<double>> &xbins);
    std::shared_ptr<::THnD> GetHistogram() const;
+};
+
+struct THnSparseModel {
+   TString fName;
+   TString fTitle;
+   int fDim;
+   std::vector<int> fNbins;
+   std::vector<double> fXmin;
+   std::vector<double> fXmax;
+   std::vector<std::vector<double>> fBinEdges;
+
+   THnSparseModel() = default;
+   THnSparseModel(const THnSparseModel &) = default;
+   ~THnSparseModel();
+   THnSparseModel(const ::THnSparse &h);
+   THnSparseModel(const char *name, const char *title, int dim, const int *nbins, const double *xmin, const double *xmax);
+   // alternate version with std::vector to allow more convenient initialization from PyRoot
+   THnSparseModel(const char *name, const char *title, int dim, const std::vector<int> &nbins,
+             const std::vector<double> &xmin, const std::vector<double> &xmax);
+   THnSparseModel(const char *name, const char *title, int dim, const int *nbins,
+             const std::vector<std::vector<double>> &xbins);
+   THnSparseModel(const char *name, const char *title, int dim, const std::vector<int> &nbins,
+             const std::vector<std::vector<double>> &xbins);
+   std::shared_ptr<::THnSparse> GetHistogram() const;
 };
 
 struct TProfile1DModel {

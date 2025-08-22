@@ -2288,6 +2288,80 @@ public:
    }
 
    ////////////////////////////////////////////////////////////////////////////
+   /// \brief Fill and return an N-dimensional sparse histogram (*lazy action*).
+   /// \tparam FirstColumn The first type of the column the values of which are used to fill the object. Inferred if not
+   /// present.
+   /// \tparam OtherColumns A list of the other types of the columns the values of which are used to fill the
+   /// object.
+   /// \param[in] model The returned histogram will be constructed using this as a model.
+   /// \param[in] columnList
+   /// A list containing the names of the columns that will be passed when calling `Fill`.
+   ///  (N columns for unweighted filling, or N+1 columns for weighted filling)
+   /// \return the N-dimensional sparse histogram wrapped in a RResultPtr.
+   ///
+   /// This action is *lazy*: upon invocation of this method the calculation is
+   /// booked but not executed. See RResultPtr documentation.
+   ///
+   /// ### Example usage:
+   /// ~~~{.cpp}
+   /// auto myFilledObj = myDf.HistoNDSparse<float, float, float, float>({"name","title", 4,
+   ///                                                {40,40,40,40}, {20.,20.,20.,20.}, {60.,60.,60.,60.}},
+   ///                                               {"col0", "col1", "col2", "col3"});
+   /// ~~~
+   ///
+   template <typename FirstColumn, typename... OtherColumns> // need FirstColumn to disambiguate overloads
+   RResultPtr<::THnSparse> HistoNDSparse(const THnSparseModel &model, const ColumnNames_t &columnList)
+   {
+      std::shared_ptr<::THnSparse> h(nullptr);
+      {
+         ROOT::Internal::RDF::RIgnoreErrorLevelRAII iel(kError);
+         h = model.GetHistogram();
+
+         if (int(columnList.size()) == (h->GetNdimensions() + 1)) {
+            h->Sumw2();
+         } else if (int(columnList.size()) != h->GetNdimensions()) {
+            throw std::runtime_error("Wrong number of columns for the specified number of histogram axes.");
+         }
+      }
+      return CreateAction<RDFInternal::ActionTags::HistoNDSparse, FirstColumn, OtherColumns...>(columnList, h, h,
+                                                                                          fProxiedPtr);
+   }
+
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Fill and return an N-dimensional sparse histogram (*lazy action*).
+   /// \param[in] model The returned histogram will be constructed using this as a model.
+   /// \param[in] columnList A list containing the names of the columns that will be passed when calling `Fill`
+   ///  (N columns for unweighted filling, or N+1 columns for weighted filling)
+   /// \return the N-dimensional sparse histogram wrapped in a RResultPtr.
+   ///
+   /// This action is *lazy*: upon invocation of this method the calculation is
+   /// booked but not executed. Also see RResultPtr.
+   ///
+   /// ### Example usage:
+   /// ~~~{.cpp}
+   /// auto myFilledObj = myDf.HistoNDSparse({"name","title", 4,
+   ///                                                {40,40,40,40}, {20.,20.,20.,20.}, {60.,60.,60.,60.}},
+   ///                                               {"col0", "col1", "col2", "col3"});
+   /// ~~~
+   ///
+   RResultPtr<::THnSparse> HistoNDSparse(const THnSparseModel &model, const ColumnNames_t &columnList)
+   {
+      std::shared_ptr<::THnSparse> h(nullptr);
+      {
+         ROOT::Internal::RDF::RIgnoreErrorLevelRAII iel(kError);
+         h = model.GetHistogram();
+
+         if (int(columnList.size()) == (h->GetNdimensions() + 1)) {
+            h->Sumw2();
+         } else if (int(columnList.size()) != h->GetNdimensions()) {
+            throw std::runtime_error("Wrong number of columns for the specified number of histogram axes.");
+         }
+      }
+      return CreateAction<RDFInternal::ActionTags::HistoNDSparse, RDFDetail::RInferredType>(columnList, h, h, fProxiedPtr,
+                                                                                      columnList.size());
+   }
+
+   ////////////////////////////////////////////////////////////////////////////
    /// \brief Fill and return a TGraph object (*lazy action*).
    /// \tparam X The type of the column used to fill the x axis.
    /// \tparam Y The type of the column used to fill the y axis.
