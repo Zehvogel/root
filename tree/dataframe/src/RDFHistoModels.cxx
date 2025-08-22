@@ -379,7 +379,6 @@ std::shared_ptr<::THnSparse> THnSparseModel::GetHistogram() const
    } else {
       h = std::make_shared<::THnSparseD>(fName, fTitle, fDim, fNbins.data(), fXmin.data(), fXmax.data());
    }
-   h->SetDirectory(nullptr); // object's lifetime is managed by the shared_ptr, detach it from ROOT's memory management
    return h;
 }
 

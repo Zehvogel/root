@@ -367,12 +367,12 @@ TEST(RDataFrameHistoModels, HistoNDSparse)
    auto h2e = d.HistoNDSparse({"h2e", "h2e", 4, nbinse, edges}, {"x0", "x1", "x2", "x3"});
 
    THnSparseModel m0("m0", "m0", 4, nbins, xmin, xmax);
-   // THnSparseModel m1(::THnSparseD("m1", "m1", 4, nbins, xmin, xmax)); // Skip this for now
+   THnSparseModel m1(::THnSparseD("m1", "m1", 4, nbins, xmin, xmax));
 
    auto hm0 = d.HistoNDSparse(m0, {"x0", "x1", "x2", "x3"});
-   // auto hm1 = d.HistoNDSparse(m1, {"x0", "x1", "x2", "x3"}); // Skip this for now
+   auto hm1 = d.HistoNDSparse(m1, {"x0", "x1", "x2", "x3"});
    auto hm0w = d.HistoNDSparse(m0, {"x0", "x1", "x2", "x3", "x3"});
-   // auto hm1w = d.HistoNDSparse(m1, {"x0", "x1", "x2", "x3", "x3"}); // Skip this for now
+   auto hm1w = d.HistoNDSparse(m1, {"x0", "x1", "x2", "x3", "x3"});
 
    std::vector<double> ref0({0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10.});
    std::vector<double> ref1({0., 2., 4., 6., 8., 10.});

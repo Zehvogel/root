@@ -22,8 +22,10 @@ class THnT;
 using THnD = THnT<double>;
 class TProfile;
 class TProfile2D;
-class THnSparse;
-class THnSparseD;
+class TArrayD;
+template <class CONT>
+class THnSparseT;
+using THnSparseD = THnSparseT<TArrayD>;
 
 namespace ROOT {
 
