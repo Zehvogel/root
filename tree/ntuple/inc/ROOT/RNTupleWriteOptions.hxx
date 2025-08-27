@@ -188,7 +188,7 @@ public:
    };
 
    // clang-format off
-   static constexpr std::uint64_t kDefaultMaxKeySize = 0x4000'0000; // 1 GiB
+   static constexpr std::uint64_t kDefaultMaxKeySize = 0x1000'0000'0000; // 16 TiB
    // clang-format on
 
    friend Internal::RNTupleWriteOptionsManip;
