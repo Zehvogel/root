@@ -116,7 +116,6 @@ public:
    void UpdateHelper(unsigned int slot, Long64_t entry, TypeList<ColTypes...>, std::index_sequence<S...>, NoneTag)
    {
       auto &&results = fExpression(GetValueChecked<ColTypes>(slot, S, entry, fInputColumnNames)...);
-      (void)entry; // avoid unused parameter warning (gcc 12.1)
       
       if (results.size() != fColNames.size()) {
          throw std::runtime_error("The Define expression for multiple columns returned " + 
@@ -125,17 +124,13 @@ public:
       }
       
       // Move results to fLastResults
-      auto &lastRes = fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()];
-      for (auto i = 0u; i < results.size(); ++i) {
-         lastRes[i] = std::move(results[i]);
-      }
+      fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()] = std::move(results);
    }
 
    template <typename... ColTypes, std::size_t... S>
    void UpdateHelper(unsigned int slot, Long64_t entry, TypeList<ColTypes...>, std::index_sequence<S...>, SlotTag)
    {
       auto &&results = fExpression(slot, GetValueChecked<ColTypes>(slot, S, entry, fInputColumnNames)...);
-      (void)entry; // avoid unused parameter warning (gcc 12.1)
       
       if (results.size() != fColNames.size()) {
          throw std::runtime_error("The Define expression for multiple columns returned " + 
@@ -144,10 +139,7 @@ public:
       }
       
       // Move results to fLastResults
-      auto &lastRes = fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()];
-      for (auto i = 0u; i < results.size(); ++i) {
-         lastRes[i] = std::move(results[i]);
-      }
+      fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()] = std::move(results);
    }
 
    template <typename... ColTypes, std::size_t... S>
@@ -162,10 +154,7 @@ public:
       }
       
       // Move results to fLastResults
-      auto &lastRes = fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()];
-      for (auto i = 0u; i < results.size(); ++i) {
-         lastRes[i] = std::move(results[i]);
-      }
+      fLastResults[slot * RDFInternal::CacheLineStep<ROOT::RVec<DefinedCol_t>>()] = std::move(results);
    }
    
    void Update(unsigned int slot, Long64_t entry)
