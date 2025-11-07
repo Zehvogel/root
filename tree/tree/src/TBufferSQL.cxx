@@ -427,10 +427,10 @@ void TBufferSQL::WriteCharP(const Char_t *str)
 void TBufferSQL::WriteFastArray(const bool *b, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // 2 chars
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -447,10 +447,10 @@ void TBufferSQL::WriteFastArray(const bool *b, Long64_t n)
 void TBufferSQL::WriteFastArray(const Char_t *c, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -467,10 +467,10 @@ void TBufferSQL::WriteFastArray(const Char_t *c, Long64_t n)
 void TBufferSQL::WriteFastArrayString(const Char_t *c, Long64_t /* n */)
 {
    constexpr Int_t dataWidth = 4; // 4 chars
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (maxElements < 1)
    {
-      Fatal("WriteFastArrayString", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", 1LL, maxElements);
+      Fatal("WriteFastArrayString", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", 1LL, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    (*fInsertQuery) += "\"";
@@ -486,10 +486,10 @@ void TBufferSQL::WriteFastArrayString(const Char_t *c, Long64_t /* n */)
 void TBufferSQL::WriteFastArray(const UChar_t *uc, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -506,10 +506,10 @@ void TBufferSQL::WriteFastArray(const UChar_t *uc, Long64_t n)
 void TBufferSQL::WriteFastArray(const Short_t *h, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -527,10 +527,10 @@ void TBufferSQL::WriteFastArray(const Short_t *h, Long64_t n)
 void TBufferSQL::WriteFastArray(const UShort_t *us, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -547,10 +547,10 @@ void TBufferSQL::WriteFastArray(const UShort_t *us, Long64_t n)
 void TBufferSQL::WriteFastArray(const Int_t     *ii, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
     //   std::cerr << "Column: " <<*fIter << "   i:" << *ii << std::endl;
@@ -568,10 +568,10 @@ void TBufferSQL::WriteFastArray(const Int_t     *ii, Long64_t n)
 void TBufferSQL::WriteFastArray(const UInt_t *ui, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -588,10 +588,10 @@ void TBufferSQL::WriteFastArray(const UInt_t *ui, Long64_t n)
 void TBufferSQL::WriteFastArray(const Long_t    *l, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -608,10 +608,10 @@ void TBufferSQL::WriteFastArray(const Long_t    *l, Long64_t n)
 void TBufferSQL::WriteFastArray(const ULong_t   *ul, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -628,10 +628,10 @@ void TBufferSQL::WriteFastArray(const ULong_t   *ul, Long64_t n)
 void TBufferSQL::WriteFastArray(const Long64_t  *l, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -648,10 +648,10 @@ void TBufferSQL::WriteFastArray(const Long64_t  *l, Long64_t n)
 void TBufferSQL::WriteFastArray(const ULong64_t *ul, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -668,10 +668,10 @@ void TBufferSQL::WriteFastArray(const ULong64_t *ul, Long64_t n)
 void TBufferSQL::WriteFastArray(const Float_t   *f, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
@@ -688,10 +688,10 @@ void TBufferSQL::WriteFastArray(const Float_t   *f, Long64_t n)
 void TBufferSQL::WriteFastArray(const Double_t  *d, Long64_t n)
 {
    constexpr Int_t dataWidth = 2; // at least 2 chars, but could be more.
-   const Int_t maxElements = (std::numeric_limits<Int_t>::max() - Length())/dataWidth;
+   const Long64_t maxElements = (std::numeric_limits<Long64_t>::max() - Length())/dataWidth;
    if (n < 0 || n > maxElements)
    {
-      Fatal("WriteFastArray", "Not enough space left in the buffer (1GB limit). %lld elements is greater than the max left of %d", n, maxElements);
+      Fatal("WriteFastArray", "Not enough space left in the buffer. %lld elements is greater than the max left of %lld", n, maxElements);
       return; // In case the user re-routes the error handler to not die when Fatal is called
    }
    for(int i=0; i<n; ++i) {
