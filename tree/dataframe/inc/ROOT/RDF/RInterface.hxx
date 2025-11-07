@@ -3427,6 +3427,10 @@ private:
       using Ret_t = typename TTraits::CallableTraits<F>::ret_type;
       using DefinedCol_t = RDFDetail::ColumnTypeForMultiDefine_t<Ret_t>;
 
+      // Check that the column type is default constructible
+      static_assert(std::is_default_constructible<DefinedCol_t>::value,
+                    "The column type returned by the multi-column Define expression must be default-constructible");
+
       // Declare return type to the interpreter
       auto retTypeName = RDFInternal::TypeID2TypeName(typeid(DefinedCol_t));
       if (retTypeName.empty()) {

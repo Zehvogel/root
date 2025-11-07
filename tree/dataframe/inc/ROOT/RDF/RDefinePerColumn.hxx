@@ -80,6 +80,9 @@ public:
    /// Column readers per slot and per input column
    std::vector<std::array<RColumnReaderBase *, ColumnTypes_t::list_size>> fValues;
    
+   /// Flag to track whether InitSlot has been called for each slot
+   std::vector<bool> fSlotInitialized;
+   
    RDefineMultiSharedState(F expression, const std::vector<std::string> &colNames,
                           const ROOT::RDF::ColumnNames_t &inputColumns, unsigned int nSlots)
       : fExpression(std::move(expression)),
@@ -87,7 +90,8 @@ public:
         fLastCheckedEntry(nSlots * RDFInternal::CacheLineStep<Long64_t>(), -1),
         fColNames(colNames),
         fInputColumnNames(inputColumns),
-        fValues(nSlots)
+        fValues(nSlots),
+        fSlotInitialized(nSlots, false)
    {
       // Initialize storage for each slot
       for (auto i = 0u; i < nSlots; ++i) {
@@ -212,10 +216,11 @@ public:
 
    void InitSlot(TTreeReader *r, unsigned int slot) final
    {
-      // Only initialize column readers once (for the first column in the group)
-      if (fColumnIndex == 0) {
+      // Only initialize column readers once per slot (thread-safe since each slot is accessed by only one thread)
+      if (!fSharedState->fSlotInitialized[slot]) {
          RDFInternal::RColumnReadersInfo info{fSharedState->fInputColumnNames, fColRegister, fIsDefine.data(), *fLoopManager};
          fSharedState->fValues[slot] = RDFInternal::GetColumnReaders(slot, r, ColumnTypes_t{}, info, fVariation);
+         fSharedState->fSlotInitialized[slot] = true;
       }
       fLastCheckedEntry[slot * RDFInternal::CacheLineStep<Long64_t>()] = -1;
    }
@@ -241,9 +246,11 @@ public:
    /// Clean-up operations to be performed at the end of a task.
    void FinalizeSlot(unsigned int slot) final
    {
-      // Only finalize once (for the last column in the group)
-      if (fColumnIndex == fSharedState->fColNames.size() - 1) {
+      // Clean up shared resources only once per slot
+      // We use a simple check: only the first column (index 0) cleans up
+      if (fColumnIndex == 0 && fSharedState->fSlotInitialized[slot]) {
          fSharedState->fValues[slot].fill(nullptr);
+         fSharedState->fSlotInitialized[slot] = false;
       }
 
       for (auto &e : fVariedDefines)
