@@ -36,6 +36,7 @@ public:
   RooMultiVarGaussian(const char *name, const char *title, const RooArgList& xvec, const RooFitResult& fr, bool reduceToConditional=true) ;
   RooMultiVarGaussian(const char *name, const char *title, const RooArgList& xvec, const TVectorD& mu, const TMatrixDBase& covMatrix) ;
   RooMultiVarGaussian(const char *name, const char *title, const RooArgList& xvec,const TMatrixDBase& covMatrix) ;
+  RooMultiVarGaussian(const char *name, const char *title, const RooArgList& xvec, const RooArgList& mu, const RooArgList& covElements) ;
   void setAnaIntZ(double z) { _z = z ; }
 
   RooMultiVarGaussian(const RooMultiVarGaussian& other, const char* name=nullptr) ;
@@ -98,13 +99,16 @@ protected:
 
   RooListProxy _x ;
   RooListProxy _mu ;
-  TMatrixDSym _cov ;
-  TMatrixDSym _covI ;
-  double    _det ;
+  RooListProxy _covElements ; ///< Covariance matrix elements (if parametrized)
+  mutable TMatrixDSym _cov ;
+  mutable TMatrixDSym _covI ;
+  mutable double    _det ;
   double    _z ;
 
   void syncMuVec() const ;
+  void syncCovMatrix() const ;
   mutable TVectorD _muVec ; //! Do not persist
+  mutable bool _covIsParametric ; //! Do not persist
 
   double evaluate() const override ;
 

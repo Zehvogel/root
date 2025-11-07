@@ -24,6 +24,7 @@ Multivariate Gaussian p.d.f. with correlations
 
 #include "Riostream.h"
 #include <cmath>
+#include <sstream>
 
 #include "RooMultiVarGaussian.h"
 #include "RooAbsReal.h"
@@ -45,9 +46,11 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title,
   RooAbsPdf(name,title),
   _x("x","Observables",this,true,false),
   _mu("mu","Offset vector",this,true,false),
+  _covElements("covElements","Covariance matrix elements",this,true,false),
   _cov{cov.GetNrows()},
   _covI{cov.GetNrows()},
-  _z(4)
+  _z(4),
+  _covIsParametric(false)
 {
  if(!cov.IsSymmetric()) {
       std::stringstream errorMsg;
@@ -78,10 +81,12 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title, co
    : RooAbsPdf(name, title),
      _x("x", "Observables", this, true, false),
      _mu("mu", "Offset vector", this, true, false),
+     _covElements("covElements","Covariance matrix elements",this,true,false),
      _cov(reduceToConditional ? fr.conditionalCovarianceMatrix(xvec) : fr.reducedCovarianceMatrix(xvec)),
      _covI(_cov),
      _det(_cov.Determinant()),
-     _z(4)
+     _z(4),
+     _covIsParametric(false)
 {
 
   // Fill mu vector with constant RooRealVars
@@ -149,9 +154,51 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title, co
 
 ////////////////////////////////////////////////////////////////////////////////
 
+RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title, const RooArgList &xvec,
+                                         const RooArgList &mu, const RooArgList &covElements)
+   : RooAbsPdf(name, title),
+     _x("x", "Observables", this, true, false),
+     _mu("mu", "Offset vector", this, true, false),
+     _covElements("covElements", "Covariance matrix elements", this, true, false),
+     _cov{xvec.size()},
+     _covI{xvec.size()},
+     _z(4),
+     _covIsParametric(true)
+{
+   // Check that we have the right number of covariance elements
+   const std::size_t n = xvec.size();
+   const std::size_t expectedCovElements = n * (n + 1) / 2;
+   
+   if (covElements.size() != expectedCovElements) {
+      std::stringstream errorMsg;
+      errorMsg << "RooMultiVarGaussian::RooMultiVarGaussian(" << GetName()
+               << ") expected " << expectedCovElements 
+               << " covariance matrix elements for " << n 
+               << " observables, but got " << covElements.size();
+      coutE(InputArguments) << errorMsg.str() << std::endl;
+      throw std::invalid_argument(errorMsg.str().c_str());
+   }
+
+   _x.add(xvec);
+   _mu.add(mu);
+   _covElements.add(covElements);
+
+   // Initialize covariance matrix and compute determinant
+   syncCovMatrix();
+   _det = _cov.Determinant();
+
+   // Invert covariance matrix
+   _covI.Invert();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
+
 RooMultiVarGaussian::RooMultiVarGaussian(const RooMultiVarGaussian& other, const char* name) :
   RooAbsPdf(other,name), _aicMap(other._aicMap), _x("x",this,other._x), _mu("mu",this,other._mu),
-  _cov(other._cov), _covI(other._covI), _det(other._det), _z(other._z)
+  _covElements("covElements",this,other._covElements),
+  _cov(other._cov), _covI(other._covI), _det(other._det), _z(other._z),
+  _covIsParametric(other._covIsParametric)
 {
 }
 
@@ -169,6 +216,38 @@ void RooMultiVarGaussian::syncMuVec() const
 
 
 ////////////////////////////////////////////////////////////////////////////////
+
+void RooMultiVarGaussian::syncCovMatrix() const
+{
+  if (!_covIsParametric) {
+    return; // Nothing to sync for fixed covariance matrix
+  }
+
+  const std::size_t n = _x.size();
+  _cov.ResizeTo(n, n);
+  
+  // Fill the covariance matrix from the parametric elements
+  // Elements are assumed to be in upper triangular order: (0,0), (0,1), (1,1), (0,2), (1,2), (2,2), etc.
+  std::size_t idx = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    for (std::size_t j = i; j < n; ++j) {
+      double val = static_cast<RooAbsReal*>(_covElements.at(idx))->getVal();
+      _cov(i, j) = val;
+      if (i != j) {
+        _cov(j, i) = val; // Symmetric matrix
+      }
+      ++idx;
+    }
+  }
+  
+  // Update the inverse and determinant
+  _covI = _cov;
+  _det = _cov.Determinant();
+  _covI.Invert();
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
 /// Represent observables as vector
 
 double RooMultiVarGaussian::evaluate() const
@@ -180,6 +259,7 @@ double RooMultiVarGaussian::evaluate() const
 
   // Calculate return value
   syncMuVec() ;
+  syncCovMatrix() ; // Update covariance matrix if parametric
   TVectorD x_min_mu = x - _muVec ;
 
   double alpha =  x_min_mu * (_covI * x_min_mu) ;
@@ -221,6 +301,7 @@ Int_t RooMultiVarGaussian::getAnalyticalIntegral(RooArgSet& allVarsIn, RooArgSet
   BitBlock bits ;
   bool anyBits(false) ;
   syncMuVec() ;
+  syncCovMatrix() ; // Update covariance matrix if parametric
   for (std::size_t i=0 ; i<_x.size() ; i++) {
 
     // Check if integration over observable #i is requested
@@ -284,6 +365,7 @@ Int_t RooMultiVarGaussian::getAnalyticalIntegral(RooArgSet& allVarsIn, RooArgSet
 
 double RooMultiVarGaussian::analyticalIntegral(Int_t code, const char* /*rangeName*/) const
 {
+  syncCovMatrix() ; // Update covariance matrix if parametric
   if (code==-1) {
     return pow(2*3.14159268,_x.size()/2.)*sqrt(std::abs(_det)) ;
   }
@@ -313,7 +395,7 @@ double RooMultiVarGaussian::analyticalIntegral(Int_t code, const char* /*rangeNa
 RooMultiVarGaussian::AnaIntData& RooMultiVarGaussian::anaIntData(Int_t code) const
 {
   map<int,AnaIntData>::iterator iter =  _anaIntCache.find(code) ;
-  if (iter != _anaIntCache.end()) {
+  if (iter != _anaIntCache.end() && !_covIsParametric) {
     return iter->second ;
   }
 
@@ -496,9 +578,11 @@ void RooMultiVarGaussian::generateEvent(Int_t code)
 
 RooMultiVarGaussian::GenData& RooMultiVarGaussian::genData(Int_t code) const
 {
-  // Check if cache entry was previously created
+  syncCovMatrix() ; // Update covariance matrix if parametric
+  
+  // Check if cache entry was previously created (but don't use cache for parametric covariance)
   map<int,GenData>::iterator iter =  _genCache.find(code) ;
-  if (iter != _genCache.end()) {
+  if (iter != _genCache.end() && !_covIsParametric) {
     return iter->second ;
   }
 
