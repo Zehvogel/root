@@ -33,6 +33,7 @@ ROOT_GENERATE_DICTIONARY(TwoFloatsDict ${CMAKE_CURRENT_SOURCE_DIR}/TwoFloats.h M
 
 ROOT_ADD_GTEST(dataframe_redefine dataframe_redefine.cxx LIBRARIES ROOTDataFrame)
 ROOT_ADD_GTEST(dataframe_definepersample dataframe_definepersample.cxx LIBRARIES ROOTDataFrame)
+ROOT_ADD_GTEST(dataframe_definemulti dataframe_definemulti.cxx LIBRARIES ROOTDataFrame)
 
 if(NOT MSVC OR win_broken_tests)
   ROOT_ADD_GTEST(dataframe_simple dataframe_simple.cxx LIBRARIES ROOTDataFrame GenVector)
