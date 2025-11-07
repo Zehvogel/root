@@ -18,6 +18,7 @@
 #include "ROOT/RDF/RColumnRegister.hxx"
 #include "ROOT/RDF/RDefaultValueFor.hxx"
 #include "ROOT/RDF/RDefine.hxx"
+#include "ROOT/RDF/RDefinePerColumn.hxx"
 #include "ROOT/RDF/RDefinePerSample.hxx"
 #include "ROOT/RDF/RFilter.hxx"
 #include "ROOT/RDF/RInterfaceBase.hxx"
@@ -639,6 +640,135 @@ public:
       RInterface<Proxied, DS_t> newInterface(fProxiedPtr, *fLoopManager, std::move(newCols));
 
       return newInterface;
+   }
+
+   // clang-format off
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Define multiple new columns simultaneously.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values. 
+   ///            Must return an RVec with one value per defined column. All columns will have the same type.
+   /// \param[in] columns Names of the columns/branches in input to the expression.
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// This method allows defining multiple columns with a single expression, which can be more efficient than multiple
+   /// separate Define calls when the columns share expensive computations.
+   ///
+   /// ### Example usage:
+   /// ~~~{.cpp}
+   /// // Define two columns at once from existing columns
+   /// auto df2 = df.Define({"x2", "y2"}, [](double x, double y) { return ROOT::RVec<double>{x*x, y*y}; }, {"x", "y"});
+   /// 
+   /// // Define three columns using a lambda
+   /// auto df3 = df.Define({"sum", "diff", "prod"}, 
+   ///                      [](double a, double b) { return ROOT::RVec<double>{a+b, a-b, a*b}; }, 
+   ///                      {"a", "b"});
+   /// ~~~
+   ///
+   /// \note The expression must return an RVec with size equal to the number of column names provided.
+   /// \note All defined columns will have the same type (the element type of the returned RVec).
+   /// \note An exception is thrown if any of the new column names is already in use.
+   // clang-format on
+   template <typename F, typename std::enable_if_t<!std::is_convertible<F, std::string>::value, int> = 0>
+   RInterface<Proxied, DS_t> Define(const std::vector<std::string> &colNames, F expression, 
+                                    const ColumnNames_t &columns = {})
+   {
+      return DefineMultiImpl<F, RDFDetail::ExtraArgsForDefine::None>(colNames, std::move(expression), columns, "Define");
+   }
+
+   /// \brief Define multiple new columns simultaneously.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values.
+   /// \param[in] columns Names of the columns/branches in input to the expression.
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// \note This overload ensures that the ambiguity between C++20 string, vector<string> construction from init list is avoided.
+   ///
+   /// See the vector<string> overload for more information.
+   template <typename F, typename std::enable_if_t<!std::is_convertible<F, std::string>::value, int> = 0>
+   RInterface<Proxied, DS_t> Define(std::initializer_list<std::string> colNames, F expression,
+                                    const ColumnNames_t &columns = {})
+   {
+      return Define(std::vector<std::string>(colNames), std::move(expression), columns);
+   }
+
+   // clang-format off
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Define multiple new columns with values dependent on the processing slot.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values.
+   ///            The first parameter must be an unsigned int for the slot number.
+   /// \param[in] columns Names of the columns/branches in input to the expression (excluding the slot number).
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// This alternative implementation of multi-column Define is meant as a helper to evaluate new column values in a thread-safe manner.
+   /// The expression must be a callable of signature RVec<T>(unsigned int, T1, T2, ...) where `T1, T2...` are the types
+   /// of the columns that the expression takes as input. The first parameter is reserved for an unsigned integer
+   /// representing a "slot number". RDataFrame guarantees that different threads will invoke the expression with
+   /// different slot numbers - slot numbers will range from zero to ROOT::GetThreadPoolSize()-1.
+   ///
+   /// See the basic Define() overload for more information.
+   // clang-format on
+   template <typename F>
+   RInterface<Proxied, DS_t> DefineSlot(const std::vector<std::string> &colNames, F expression,
+                                         const ColumnNames_t &columns = {})
+   {
+      return DefineMultiImpl<F, RDFDetail::ExtraArgsForDefine::Slot>(colNames, std::move(expression), columns, "DefineSlot");
+   }
+
+   /// \brief Define multiple new columns with values dependent on the processing slot.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values.
+   /// \param[in] columns Names of the columns/branches in input to the expression (excluding the slot number).
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// \note This overload ensures that the ambiguity between C++20 string, vector<string> construction from init list is avoided.
+   ///
+   /// See the vector<string> overload for more information.
+   template <typename F>
+   RInterface<Proxied, DS_t> DefineSlot(std::initializer_list<std::string> colNames, F expression,
+                                         const ColumnNames_t &columns = {})
+   {
+      return DefineSlot(std::vector<std::string>(colNames), std::move(expression), columns);
+   }
+
+   // clang-format off
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Define multiple new columns with values dependent on the processing slot and entry.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values.
+   ///            The first two parameters must be unsigned int for slot and ULong64_t for entry.
+   /// \param[in] columns Names of the columns/branches in input to the expression (excluding slot and entry).
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// This alternative implementation of multi-column Define is meant as a helper in writing entry-specific, thread-safe custom columns.
+   /// The expression must be a callable of signature RVec<T>(unsigned int, ULong64_t, T1, T2, ...) where `T1, T2...`
+   /// are the types of the columns that the expression takes as input.
+   ///
+   /// See the basic Define() overload for more information.
+   // clang-format on
+   template <typename F>
+   RInterface<Proxied, DS_t> DefineSlotEntry(const std::vector<std::string> &colNames, F expression,
+                                              const ColumnNames_t &columns = {})
+   {
+      return DefineMultiImpl<F, RDFDetail::ExtraArgsForDefine::SlotAndEntry>(colNames, std::move(expression), columns,
+                                                                             "DefineSlotEntry");
+   }
+
+   /// \brief Define multiple new columns with values dependent on the processing slot and entry.
+   /// \param[in] colNames The names of the defined columns.
+   /// \param[in] expression Function, lambda expression, functor class or any other callable object producing the defined values.
+   /// \param[in] columns Names of the columns/branches in input to the expression (excluding slot and entry).
+   /// \return the first node of the computation graph for which the new quantities are defined.
+   ///
+   /// \note This overload ensures that the ambiguity between C++20 string, vector<string> construction from init list is avoided.
+   ///
+   /// See the vector<string> overload for more information.
+   template <typename F>
+   RInterface<Proxied, DS_t> DefineSlotEntry(std::initializer_list<std::string> colNames, F expression,
+                                              const ColumnNames_t &columns = {})
+   {
+      return DefineSlotEntry(std::vector<std::string>(colNames), std::move(expression), columns);
    }
 
    ////////////////////////////////////////////////////////////////////////////
@@ -3260,6 +3390,66 @@ private:
       static_assert(std::is_default_constructible<typename TTraits::CallableTraits<F>::ret_type>::value,
                     "Error in `Define`: type returned by expression is not default-constructible");
       return *this; // never reached
+   }
+
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Implementation of multi-column Define.
+   template <typename F, typename DefineType>
+   RInterface<Proxied, DS_t>
+   DefineMultiImpl(const std::vector<std::string> &colNames, F &&expression, const ColumnNames_t &inputColumns,
+                   const std::string &where)
+   {
+      // Validate all column names
+      for (const auto &name : colNames) {
+         if (where.compare(0, 8, "Redefine") != 0) { // not a Redefine
+            RDFInternal::CheckValidCppVarName(name, where);
+            RDFInternal::CheckForRedefinition(where, name, fColRegister,
+                                              GetDataSource() ? GetDataSource()->GetColumnNames() : ColumnNames_t{});
+         } else {
+            RDFInternal::CheckForDefinition(where, name, fColRegister,
+                                            GetDataSource() ? GetDataSource()->GetColumnNames() : ColumnNames_t{});
+            RDFInternal::CheckForNoVariations(where, name, fColRegister);
+         }
+      }
+
+      using ArgTypes_t = typename TTraits::CallableTraits<F>::arg_types;
+      using ColTypesTmp_t = typename RDFInternal::RemoveFirstParameterIf<
+         std::is_same<DefineType, RDFDetail::ExtraArgsForDefine::Slot>::value, ArgTypes_t>::type;
+      using ColTypes_t = typename RDFInternal::RemoveFirstTwoParametersIf<
+         std::is_same<DefineType, RDFDetail::ExtraArgsForDefine::SlotAndEntry>::value, ColTypesTmp_t>::type;
+
+      constexpr auto nInputColumns = ColTypes_t::list_size;
+
+      const auto validColumnNames = GetValidatedColumnNames(nInputColumns, inputColumns);
+      CheckAndFillDSColumns(validColumnNames, ColTypes_t());
+
+      // Extract the return type and the column element type
+      using Ret_t = typename TTraits::CallableTraits<F>::ret_type;
+      using DefinedCol_t = RDFDetail::ColumnTypeForMultiDefine_t<Ret_t>;
+
+      // Declare return type to the interpreter
+      auto retTypeName = RDFInternal::TypeID2TypeName(typeid(DefinedCol_t));
+      if (retTypeName.empty()) {
+         const auto demangledType = RDFInternal::DemangleTypeIdName(typeid(DefinedCol_t));
+         retTypeName = "CLING_UNKNOWN_TYPE_" + demangledType;
+      }
+
+      // Create shared state for all columns
+      auto sharedState = std::make_shared<RDFDetail::RDefineMultiSharedState<F, DefineType>>(
+         std::forward<F>(expression), colNames, validColumnNames, fLoopManager->GetNSlots());
+
+      // Create one RDefine object per column, all sharing the same expression evaluation
+      RDFInternal::RColumnRegister newCols(fColRegister);
+      for (std::size_t i = 0; i < colNames.size(); ++i) {
+         using NewCol_t = RDFDetail::RDefinePerColumn<F, DefineType>;
+         auto newColumn = std::make_shared<NewCol_t>(colNames[i], retTypeName, sharedState, i, 
+                                                      fColRegister, *fLoopManager);
+         newCols.AddDefine(std::move(newColumn));
+      }
+
+      RInterface<Proxied> newInterface(fProxiedPtr, *fLoopManager, std::move(newCols));
+
+      return newInterface;
    }
 
    ////////////////////////////////////////////////////////////////////////////
