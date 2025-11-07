@@ -178,7 +178,12 @@ public:
 /// It shares the expression evaluation state with other columns defined by the same Define call
 template <typename F, typename ExtraArgsTag = ExtraArgsForDefine::None>
 class R__CLING_PTRCHECK(off) RDefinePerColumn final : public RDefineBase {
-   using ColumnTypes_t = typename CallableTraits<F>::arg_types_nodecay;
+   using FunParamTypes_t = typename CallableTraits<F>::arg_types;
+   using ColumnTypesTmp_t =
+      RDFInternal::RemoveFirstParameterIf_t<std::is_same<ExtraArgsTag, ExtraArgsForDefine::Slot>::value, FunParamTypes_t>;
+   using ColumnTypes_t =
+      RDFInternal::RemoveFirstTwoParametersIf_t<std::is_same<ExtraArgsTag, ExtraArgsForDefine::SlotAndEntry>::value, ColumnTypesTmp_t>;
+   using TypeInd_t = std::make_index_sequence<ColumnTypes_t::list_size>;
    using Ret_t = typename CallableTraits<F>::ret_type;
    using DefinedCol_t = ColumnTypeForMultiDefine_t<Ret_t>;
    
