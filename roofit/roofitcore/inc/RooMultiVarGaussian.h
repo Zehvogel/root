@@ -108,7 +108,7 @@ protected:
   void syncMuVec() const ;
   void syncCovMatrix() const ;
   mutable TVectorD _muVec ; //! Do not persist
-  mutable bool _covIsParametric ; //! Do not persist
+  bool _covIsParametric ; //! Do not persist
 
   double evaluate() const override ;
 

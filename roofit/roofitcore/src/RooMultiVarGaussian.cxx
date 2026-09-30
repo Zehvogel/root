@@ -24,7 +24,6 @@ Multivariate Gaussian p.d.f. with correlations
 
 #include "Riostream.h"
 #include <cmath>
-#include <sstream>
 
 #include "RooMultiVarGaussian.h"
 #include "RooAbsReal.h"
@@ -53,11 +52,10 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title,
   _covIsParametric(false)
 {
  if(!cov.IsSymmetric()) {
-      std::stringstream errorMsg;
-      errorMsg << "RooMultiVarGaussian::RooMultiVarGaussian(" << GetName()
-               << ") input covariance matrix is not symmetric!";
-      coutE(InputArguments) << errorMsg.str() << std::endl;
-      throw std::invalid_argument(errorMsg.str().c_str());
+      const std::string errorMsg = "RooMultiVarGaussian::RooMultiVarGaussian(" + std::string(GetName()) +
+                                   ") input covariance matrix is not symmetric!";
+      coutE(InputArguments) << errorMsg << std::endl;
+      throw std::invalid_argument(errorMsg);
  }
 
  _cov.SetSub(0, cov);
@@ -170,13 +168,12 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title, co
    const std::size_t expectedCovElements = n * (n + 1) / 2;
    
    if (covElements.size() != expectedCovElements) {
-      std::stringstream errorMsg;
-      errorMsg << "RooMultiVarGaussian::RooMultiVarGaussian(" << GetName()
-               << ") expected " << expectedCovElements 
-               << " covariance matrix elements for " << n 
-               << " observables, but got " << covElements.size();
-      coutE(InputArguments) << errorMsg.str() << std::endl;
-      throw std::invalid_argument(errorMsg.str().c_str());
+      const std::string errorMsg =
+         "RooMultiVarGaussian::RooMultiVarGaussian(" + std::string(GetName()) + ") expected " +
+         std::to_string(expectedCovElements) + " covariance matrix elements for " + std::to_string(n) +
+         " observables, but got " + std::to_string(covElements.size());
+      coutE(InputArguments) << errorMsg << std::endl;
+      throw std::invalid_argument(errorMsg);
    }
 
    _x.add(xvec);
@@ -185,10 +182,6 @@ RooMultiVarGaussian::RooMultiVarGaussian(const char *name, const char *title, co
 
    // Initialize covariance matrix and compute determinant
    syncCovMatrix();
-   _det = _cov.Determinant();
-
-   // Invert covariance matrix
-   _covI.Invert();
 }
 
 
@@ -224,7 +217,6 @@ void RooMultiVarGaussian::syncCovMatrix() const
   }
 
   const std::size_t n = _x.size();
-  _cov.ResizeTo(n, n);
   
   // Fill the covariance matrix from the parametric elements
   // Elements are assumed to be in upper triangular order: (0,0), (0,1), (1,1), (0,2), (1,2), (2,2), etc.
@@ -241,8 +233,8 @@ void RooMultiVarGaussian::syncCovMatrix() const
   }
   
   // Update the inverse and determinant
-  _covI = _cov;
   _det = _cov.Determinant();
+  _covI = _cov;
   _covI.Invert();
 }
 
