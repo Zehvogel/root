@@ -12,7 +12,7 @@
 /**
 \file TBufferIO.cxx
 \class TBufferIO
-\ingroup IO
+\ingroup io_other
 
 Direct subclass of TBuffer, implements common methods for TBufferFile and TBufferText classes
 */
@@ -308,7 +308,7 @@ void TBufferIO::Reset()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// This offset is used when a key (or basket) is transfered from one
+/// This offset is used when a key (or basket) is transferred from one
 /// file to the other.  In this case the TRef and TObject might have stored a
 /// pid index (to retrieve TProcessIDs) which referred to their order on the original
 /// file, the fPidOffset is to be added to those values to correctly find the

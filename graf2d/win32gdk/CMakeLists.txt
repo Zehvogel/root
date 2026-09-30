@@ -10,8 +10,7 @@
 ############################################################################
 
 # use relative paths to avoid filtering in dictionary generator
-include_directories(${FREETYPE_INCLUDE_DIRS}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/gdk/src
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/gdk/src
                     ${CMAKE_CURRENT_SOURCE_DIR}/gdk/src/gdk
                     ${CMAKE_CURRENT_SOURCE_DIR}/gdk/src/glib)
 
@@ -106,9 +105,8 @@ ROOT_STANDARD_LIBRARY_PACKAGE(Win32gdk
     TGWin32.h
     TGWin32GL.h
   SOURCES
-    src/gifdecode.c
-    src/gifencode.c
-    src/gifquantize.c
+    ../gifencode/gifdecode.cxx
+    ../gifencode/gifencode.cxx
     src/TGWin32.cxx
     src/TGWin32GL.cxx
     src/TGWin32ProxyBase.cxx
@@ -117,7 +115,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(Win32gdk
   DICTIONARY_OPTIONS
     -writeEmptyRootPCM
   LIBRARIES
-    ${FREETYPE_LIBRARIES}
+    Freetype::Freetype
     ${gdklib}
     ${gliblib}
     Glu32.lib
@@ -125,9 +123,9 @@ ROOT_STANDARD_LIBRARY_PACKAGE(Win32gdk
   DEPENDENCIES
     Core
     Graf
-  BUILTINS
-    FREETYPE
 )
+
+target_include_directories(Win32gdk PRIVATE ../gifencode)
 
 add_dependencies(Win32gdk GDKLIB glib)
 install(FILES ${gdkdlla} ${glibdlla} ${iconvdlla} DESTINATION ${CMAKE_INSTALL_BINDIR})

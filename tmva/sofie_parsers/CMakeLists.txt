@@ -9,14 +9,9 @@
 ############################################################################
 #Author: Sitong An, Lorenzo Moneta 10/03/2021
 
-#sofie is built only if protobuf is found
-
-protobuf_generate_cpp(PROTO_SRCS PROTO_HDRS "onnx_proto3")
-set_source_files_properties(${PROTO_SRCS} ${PROTO_HDRS} PROPERTIES GENERATED TRUE)
-## silence protobuf warnings for version 3.6. Not needed from protobuf version 3.17
-set_source_files_properties(${PROTO_SRCS} PROPERTIES COMPILE_FLAGS -Wno-array-bounds)
-## silence protobuf warnings for version 3.0. Not needed from protobuf version 3.6
-set_source_files_properties(${PROTO_SRCS} PROPERTIES COMPILE_FLAGS -Wno-unused-parameter)
+# The ONNX model files are read with a small self-contained protobuf
+# wire-format decoder (src/onnx.hxx), so this package has no external
+# dependency on protobuf / libprotobuf / protoc.
 
 ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofieParser
   HEADERS
@@ -25,6 +20,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofieParser
     src/RModelParser_ONNX.cxx
     src/ParseBasicUnary.cxx
     src/ParseBasicBinary.cxx
+    src/ParseBasicIs.cxx
     src/ParseBatchNormalization.cxx
     src/ParseCast.cxx
     src/ParseConcat.cxx
@@ -44,6 +40,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofieParser
     src/ParseSelu.cxx
     src/ParseShape.cxx
     src/ParseSigmoid.cxx
+    src/ParseSwish.cxx
     src/ParseSlice.cxx
     src/ParseSoftmax.cxx
     src/ParseTanh.cxx
@@ -51,8 +48,10 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofieParser
     src/ParseErf.cxx
     src/ParseRange.cxx
     src/ParseLayerNormalization.cxx
+    src/ParseInstanceNormalization.cxx
     src/ParseExpand.cxx
     src/ParseGather.cxx
+    src/ParseGatherND.cxx
     src/ParseElu.cxx
     src/ParseFuseConvAdd.cxx
     src/ParseFuseConvTransposeAdd.cxx
@@ -72,17 +71,13 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTTMVASofieParser
     src/ParseEinsum.cxx
     src/ParseRandom.cxx
     src/ParseScatterElements.cxx
-    ${PROTO_SRCS}
-  LIBRARIES PUBLIC
-    protobuf::libprotobuf
+    src/ParseScatterND.cxx
+    src/ParseNonZero.cxx
+    src/ParseNot.cxx
+    src/ParseClip.cxx
+    src/ParseGelu.cxx
+    src/ParseHardSigmoid.cxx
+    src/ParseHardSwish.cxx
   DEPENDENCIES
-    TMVA
     ROOTTMVASofie
 )
-
-target_include_directories(ROOTTMVASofieParser PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
-target_include_directories(ROOTTMVASofieParser BEFORE PUBLIC
-  ${Protobuf_INCLUDE_DIRS})
-set_target_properties(ROOTTMVASofieParser PROPERTIES
-  POSITION_INDEPENDENT_CODE TRUE)

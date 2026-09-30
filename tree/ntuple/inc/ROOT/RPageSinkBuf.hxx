@@ -1,5 +1,4 @@
 /// \file ROOT/RPageSinkBuf.hxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \author Max Orok <maxwellorok@gmail.com>
 /// \author Javier Lopez-Gomez <javier.lopez.gomez@cern.ch>
@@ -19,6 +18,8 @@
 #include <ROOT/RNTupleMetrics.hxx>
 #include <ROOT/RPageStorage.hxx>
 
+#include <atomic>
+#include <cstddef>
 #include <deque>
 #include <functional>
 #include <iterator>
@@ -36,7 +37,6 @@ namespace Internal {
 */
 // clang-format on
 class RPageSinkBuf : public RPageSink {
-private:
    /// A buffered column. The column is not responsible for RPage memory management (i.e. ReservePage),
    /// which is handled by the enclosing RPageSinkBuf.
    class RColumnBuf {
@@ -52,8 +52,8 @@ private:
       RColumnBuf() = default;
       RColumnBuf(const RColumnBuf&) = delete;
       RColumnBuf& operator=(const RColumnBuf&) = delete;
-      RColumnBuf(RColumnBuf&&) = default;
-      RColumnBuf& operator=(RColumnBuf&&) = default;
+      RColumnBuf(RColumnBuf &&) = default;
+      RColumnBuf &operator=(RColumnBuf &&) = default;
       ~RColumnBuf() { DropBufferedPages(); }
 
       /// Returns a reference to the newly buffered page. The reference remains
@@ -93,7 +93,6 @@ private:
       RPageStorage::SealedPageSequence_t fSealedPages;
    };
 
-private:
    /// I/O performance counters that get registered in fMetrics
    struct RCounters {
       ROOT::Experimental::Detail::RNTuplePlainCounter &fParallelZip;
@@ -109,6 +108,8 @@ private:
    /// The buffered page sink maintains a copy of the RNTupleModel for the inner sink.
    /// For the unbuffered case, the RNTupleModel is instead managed by a RNTupleWriter.
    std::unique_ptr<ROOT::RNTupleModel> fInnerModel;
+   /// The sum of uncompressed bytes in buffered pages. Used to heuristically reduce the memory usage.
+   std::atomic<std::size_t> fBufferedUncompressed = 0;
    /// Vector of buffered column pages. Indexed by column id.
    std::vector<RColumnBuf> fBufferedColumns;
    /// Columns committed as suppressed are stored and passed to the inner sink at cluster commit
@@ -117,14 +118,17 @@ private:
    ROOT::DescriptorId_t fNColumns = 0;
 
    void ConnectFields(const std::vector<ROOT::RFieldBase *> &fields, ROOT::NTupleSize_t firstEntry);
-   void FlushClusterImpl(std::function<void(void)> FlushClusterFn);
+   void FlushClusterImpl(const std::function<void(void)> &FlushClusterFn);
+
+   void InitImpl(ROOT::RNTupleModel &model) final;
+   RNTupleLink CommitDatasetImpl() final;
 
 public:
    explicit RPageSinkBuf(std::unique_ptr<RPageSink> inner);
    RPageSinkBuf(const RPageSinkBuf&) = delete;
    RPageSinkBuf& operator=(const RPageSinkBuf&) = delete;
-   RPageSinkBuf(RPageSinkBuf&&) = default;
-   RPageSinkBuf& operator=(RPageSinkBuf&&) = default;
+   RPageSinkBuf(RPageSinkBuf &&) = delete;
+   RPageSinkBuf &operator=(RPageSinkBuf &&) = delete;
    ~RPageSinkBuf() override;
 
    ColumnHandle_t AddColumn(ROOT::DescriptorId_t fieldId, RColumn &column) final;
@@ -133,7 +137,6 @@ public:
 
    ROOT::NTupleSize_t GetNEntries() const final { return fInnerSink->GetNEntries(); }
 
-   void InitImpl(ROOT::RNTupleModel &model) final;
    void UpdateSchema(const RNTupleModelChangeset &changeset, ROOT::NTupleSize_t firstEntry) final;
    void UpdateExtraTypeInfo(const ROOT::RExtraTypeInfoDescriptor &extraTypeInfo) final;
 
@@ -145,9 +148,11 @@ public:
    RStagedCluster StageCluster(ROOT::NTupleSize_t nNewEntries) final;
    void CommitStagedClusters(std::span<RStagedCluster> clusters) final;
    void CommitClusterGroup() final;
-   void CommitDatasetImpl() final;
+   void CommitAttributeSet(std::string_view attrSetName, const RNTupleLink &attrAnchorInfo) final;
 
    RPage ReservePage(ColumnHandle_t columnHandle, std::size_t nElements) final;
+
+   std::unique_ptr<RPageSink> CloneAsHidden(std::string_view name, const RNTupleWriteOptions &opts) const final;
 }; // RPageSinkBuf
 
 } // namespace Internal

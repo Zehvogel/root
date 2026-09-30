@@ -11,7 +11,7 @@
 
 /**
  \class TDirectoryFile
- \ingroup IO
+ \ingroup io_files
 
  A ROOT file is structured in Directories (like a file system).
  Each Directory has a list of Keys (see TKeys) and a list of objects
@@ -23,8 +23,6 @@ End_Macro
  The structure of a file is shown in TFile::TFile
 */
 
-#include <iostream>
-#include "Strlen.h"
 #include "strlcpy.h"
 #include "TDirectoryFile.h"
 #include "TFile.h"
@@ -48,6 +46,9 @@ End_Macro
 #include "TProcessUUID.h"
 #include "TVirtualMutex.h"
 #include "TEmulatedCollectionProxy.h"
+
+#include <iostream>
+#include <cstring>
 
 const UInt_t kIsBigFile = BIT(16);
 const Int_t  kMaxLen = 2048;
@@ -1258,7 +1259,9 @@ TFile *TDirectoryFile::OpenFile(const char *name, Option_t *option,const char *f
 /// Create a sub-directory "a" or a hierarchy of sub-directories "a/b/c/...".
 ///
 /// @param name the name or hierarchy of the subdirectory ("a" or "a/b/c")
-/// @param title the title
+/// @param title the title of the directory. For hierarchies, this is only applied
+/// to the innermost directory (so if `name == "a/b/c"` and `title == "my dir"`,
+/// only `c` will have the title `"my dir"`).
 /// @param returnExistingDirectory if key-name is already existing, the returned
 /// value points to preexisting sub-directory if true and to `nullptr` if false.
 /// @return a pointer to the created sub-directory, not to the top sub-directory
@@ -1284,10 +1287,11 @@ TDirectory *TDirectoryFile::mkdir(const char *name, const char *title, Bool_t re
       TDirectoryFile *tmpdir = nullptr;
       GetObject(workname.Data(), tmpdir);
       if (!tmpdir) {
-         tmpdir = (TDirectoryFile*)mkdir(workname.Data(),title);
+         // We give all intermediate directories a default title, as `title` is only given to the innermost dir.
+         tmpdir = (TDirectoryFile *)mkdir(workname.Data(), "");
          if (!tmpdir) return nullptr;
       }
-      return tmpdir->mkdir(slash + 1);
+      return tmpdir->mkdir(slash + 1, title, returnExistingDirectory);
    }
 
    TDirectory::TContext ctxt(this);

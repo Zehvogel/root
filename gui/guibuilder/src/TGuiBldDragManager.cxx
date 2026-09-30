@@ -53,7 +53,8 @@
 #include "TGScrollBar.h"
 #include "TVirtualX.h"
 #include "strlcpy.h"
-#include "snprintf.h"
+
+#include <cstdio>
 
 #undef DEBUG_LOCAL
 
@@ -230,7 +231,7 @@ const char *TGuiBldMenuDialog::GetParameters()
 
       // TODO: Combobox...
 
-      // if necessary, replace the selected object by it's address
+      // if necessary, replace the selected object by its address
       if (selfobjpos == nparam-1) {
          if (params[0]) strlcat(params, ",", 1024-strlen(params));
          snprintf(param, 255, "(TObject*)0x%zx", (size_t)fObject);
@@ -915,15 +916,12 @@ TGuiBldDragManager::TGuiBldDragManager() : TVirtualDragManager() ,
    CreateListOfDialogs();
 
    TString tmpfile = gSystem->TempDirectory();
-   char *s = gSystem->ConcatFileName(tmpfile.Data(),
-               TString::Format("RootGuiBldClipboard%d.C", gSystem->GetPid()));
-   fPasteFileName = s;
-   delete [] s;
+   fPasteFileName = TString::Format("RootGuiBldClipboard%d.C", gSystem->GetPid());
+   gSystem->PrependPathName(tmpfile.Data(), fPasteFileName);
+   
 
-   s = gSystem->ConcatFileName(tmpfile.Data(),
-               TString::Format("RootGuiBldTmpFile%d.C", gSystem->GetPid()));
-   fTmpBuildFile = s;
-   delete [] s;
+   fTmpBuildFile = TString::Format("RootGuiBldTmpFile%d.C", gSystem->GetPid());
+   gSystem->PrependPathName(tmpfile.Data(), fTmpBuildFile);
 
    fName = "Gui Builder Drag Manager";
    SetWindowName(fName.Data());
@@ -3268,12 +3266,12 @@ void TGuiBldDragManager::CloneEditable()
    }
 
    TString tmpfile = gSystem->TempDirectory();
-   char *s = gSystem->ConcatFileName(tmpfile.Data(), TString::Format("tmp%d.C",
-                                     gRandom->Integer(100)));
+   TString temp;
+   temp.Form("tmp%d.C", gRandom->Integer(100));
+   const char *s = gSystem->PrependPathName(tmpfile, temp);
    Save(s);
    gROOT->Macro(s);
    gSystem->Unlink(s);
-   delete [] s;
 
    if (fClient->GetRoot()->InheritsFrom(TGFrame::Class())) {
       TGFrame *f = (TGFrame *)fClient->GetRoot();

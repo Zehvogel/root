@@ -14,12 +14,15 @@
 #ifndef RooFit_Detail_MathFuncs_h
 #define RooFit_Detail_MathFuncs_h
 
+#include <ROOT/RConfig.hxx> // for R__HAS_CLAD
+
 #include <TMath.h>
 #include <Math/PdfFuncMathCore.h>
 #include <Math/ProbFuncMathCore.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace RooFit::Detail::MathFuncs {
@@ -177,6 +180,9 @@ template <typename DoubleArray>
 double constraintSum(DoubleArray comp, unsigned int compSize)
 {
    double sum = 0;
+#if defined(__CLING__) && defined(R__HAS_CLAD)
+#pragma clad checkpoint loop
+#endif
    for (unsigned int i = 0; i < compSize; i++) {
       sum -= std::log(comp[i]);
    }
@@ -391,6 +397,53 @@ inline double logNormalStandard(double x, double sigma, double mu)
 inline double effProd(double eff, double pdf)
 {
    return eff * pdf;
+}
+
+/// Chi-squared contribution of one bin with "expected" errors:
+/// \f$ \sigma^2 = \mu \f$. Empty/no-prediction bins contribute zero; bins with
+/// non-positive \f$ \mu \f$ but non-empty data yield NaN (to let the minimizer
+/// recover).
+inline double chi2Expected(double mu, double weight)
+{
+   if (mu == 0.0 && weight == 0.0) {
+      return 0.0;
+   }
+   if (mu <= 0.0) {
+      return std::numeric_limits<double>::quiet_NaN();
+   }
+   const double diff = mu - weight;
+   return diff * diff / mu;
+}
+
+/// Chi-squared contribution of one bin with a user-supplied symmetric error
+/// squared (e.g. `SumW2` weights from the data).
+inline double chi2Symmetric(double mu, double weight, double sigma2)
+{
+   if (sigma2 == 0.0 && mu == 0.0 && weight == 0.0) {
+      return 0.0;
+   }
+   if (sigma2 <= 0.0) {
+      return std::numeric_limits<double>::quiet_NaN();
+   }
+   const double diff = mu - weight;
+   return diff * diff / sigma2;
+}
+
+/// Chi-squared contribution of one bin with asymmetric (Poisson-style) data
+/// errors. The side facing the prediction is used: `errHi` when
+/// \f$ \mu > \mathrm{weight} \f$, otherwise `errLo`.
+inline double chi2Asymmetric(double mu, double weight, double errLo, double errHi)
+{
+   const double diff = mu - weight;
+   const double err = diff > 0.0 ? errHi : errLo;
+   const double sigma2 = err * err;
+   if (sigma2 == 0.0 && mu == 0.0 && weight == 0.0) {
+      return 0.0;
+   }
+   if (sigma2 <= 0.0) {
+      return std::numeric_limits<double>::quiet_NaN();
+   }
+   return diff * diff / sigma2;
 }
 
 inline double nll(double pdf, double weight, int binnedL, int doBinOffset)
@@ -781,8 +834,8 @@ double bernsteinIntegral(double xlo, double xhi, double xmin, double xmax, Doubl
    return norm * (xmax - xmin);
 }
 
-template <typename DoubleArray>
-double multiVarGaussian(int n, DoubleArray x, DoubleArray mu, DoubleArray covI)
+template <typename XArray, typename MuArray, typename CovArray>
+double multiVarGaussian(int n, XArray x, MuArray mu, CovArray covI)
 {
    double result = 0.0;
 
@@ -812,17 +865,47 @@ double stepFunctionIntegral(double xmin, double xmax, std::size_t nBins, DoubleA
 
 } // namespace RooFit::Detail::MathFuncs
 
+namespace clad {
+// Only declared, never defined here: clad's own headers exist exclusively
+// inside the interpreter, but this header is also compiled normally.
+template <typename T, typename U>
+struct ValueAndPushforward;
+} // namespace clad
+
 namespace clad::custom_derivatives {
 namespace RooFit::Detail::MathFuncs {
 
-// Clad can't generate the pullback for binNumber because of the
+// Clad can't generate the derivatives for binNumber because of the
 // std::lower_bound usage. But since binNumber returns an integer, and such
-// functions have mathematically no derivatives anyway, we just declare a
-// custom dummy pullback that does nothing.
+// functions have mathematically no derivatives anyway, we just declare custom
+// dummy derivatives that do nothing.
+//
+// Both directions have to be covered: the pullback alone is enough for
+// gradients, but Hessians also run the forward pass over binNumber, and
+// without a pushforward clad descends into std::lower_bound.
 
 template <class... Types>
 void binNumber_pullback(Types...)
 {
+}
+
+// The second parameter is unused. It is what keeps the return type of the
+// pushforward below dependent, so that clad::ValueAndPushforward only has to be
+// complete once that template is instantiated. That happens under clad and
+// nowhere else, while parsing the declaration happens in every build that
+// includes this header. A class template is needed here: an alias template
+// would be expanded eagerly and defeat the purpose.
+template <typename T, typename>
+struct ValueAndPushforwardOf {
+   using type = ::clad::ValueAndPushforward<T, T>;
+};
+
+template <typename DoubleArray, class... Types>
+typename ValueAndPushforwardOf<unsigned int, DoubleArray>::type
+binNumber_pushforward(double x, double coef, DoubleArray boundaries, unsigned int nBoundaries, int nbins, int blo,
+                      Types...)
+{
+   return {::RooFit::Detail::MathFuncs::binNumber(x, coef, boundaries, nBoundaries, nbins, blo), 0};
 }
 
 } // namespace RooFit::Detail::MathFuncs

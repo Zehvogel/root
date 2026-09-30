@@ -34,13 +34,11 @@
 #include <RooGlobalFunc.h>
 #include <RooHelpers.h>
 #include <RooHistFunc.h>
-#include <RooMultiVarGaussian.h>
 #include <RooNumIntConfig.h>
 #include <RooPoisson.h>
 #include <RooPolyVar.h>
 #include <RooProdPdf.h>
 #include <RooProduct.h>
-#include <RooProfileLL.h>
 #include <RooRandom.h>
 #include <RooRealSumPdf.h>
 #include <RooRealVar.h>
@@ -55,9 +53,6 @@
 #include "HFMsgService.h"
 
 #include "TH1.h"
-#include "TStopwatch.h"
-#include "TVectorD.h"
-#include "TMatrixDSym.h"
 
 // specific to this package
 #include <RooStats/HistFactory/Detail/HistFactoryImpl.h>
@@ -71,6 +66,7 @@
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <set>
 #include <utility>
 
 constexpr double alphaLow = -5.0;
@@ -94,17 +90,17 @@ std::vector<double> histToVector(TH1 const &hist)
 
 // use this order for safety on library loading
 using namespace RooStats;
-using std::string, std::vector, std::make_unique, std::pair, std::unique_ptr, std::map;
+using std::string, std::vector;
 
 using namespace RooStats::HistFactory::Detail;
 using namespace RooStats::HistFactory::Detail::MagicConstants;
 
+namespace RooStats::HistFactory {
 
-namespace RooStats{
-namespace HistFactory{
-
-  HistoToWorkspaceFactoryFast::HistoToWorkspaceFactoryFast(RooStats::HistFactory::Measurement& measurement) :
-    HistoToWorkspaceFactoryFast{measurement, Configuration{}} {}
+HistoToWorkspaceFactoryFast::HistoToWorkspaceFactoryFast(RooStats::HistFactory::Measurement &measurement)
+   : HistoToWorkspaceFactoryFast{measurement, Configuration{}}
+{
+}
 
   HistoToWorkspaceFactoryFast::HistoToWorkspaceFactoryFast(RooStats::HistFactory::Measurement& measurement,
                                                            Configuration const& cfg) :
@@ -130,9 +126,8 @@ namespace HistFactory{
     // Make a ModelConfig and configure it
     ModelConfig * proto_config = static_cast<ModelConfig *>(ws_single->obj("ModelConfig"));
     if( proto_config == nullptr ) {
-      std::cout << "Error: Did not find 'ModelConfig' object in file: " << ws_single->GetName()
-      << std::endl;
-      throw hf_exc();
+       cxcoutFHF << "Error: Did not find 'ModelConfig' object in file: " << ws_single->GetName() << std::endl;
+       throw hf_exc();
     }
 
     if( measurement.GetPOIList().empty() ) {
@@ -153,9 +148,9 @@ namespace HistFactory{
         params.add(*poi);
       }
       else {
-   std::cout << "WARNING: Can't find parameter of interest: " << poi_name
-        << " in Workspace. Not setting in ModelConfig." << std::endl;
-   //throw hf_exc();
+         cxcoutWHF << "WARNING: Can't find parameter of interest: " << poi_name
+                   << " in Workspace. Not setting in ModelConfig." << std::endl;
+         // throw hf_exc();
       }
     }
     proto_config->SetParametersOfInterest(params);
@@ -196,9 +191,8 @@ namespace HistFactory{
       cxcoutPHF << "Importing Asimov dataset" << std::endl;
       bool failure = ws_single->import(*asimov_dataset, RooFit::Rename(AsimovName.c_str()));
       if( failure ) {
-        std::cout << "Error: Failed to import Asimov dataset: " << AsimovName
-        << std::endl;
-   throw hf_exc();
+         cxcoutFHF << "Error: Failed to import Asimov dataset: " << AsimovName << std::endl;
+         throw hf_exc();
       }
 
       // Load the snapshot at the end of every loop iteration
@@ -229,9 +223,9 @@ namespace HistFactory{
     // Create a workspace for a SingleChannel from the Measurement Object
     std::unique_ptr<RooWorkspace> ws_single{this->MakeSingleChannelWorkspace(measurement, channel)};
     if( ws_single == nullptr ) {
-      cxcoutF(HistFactory) << "Error: Failed to make Single-Channel workspace for channel: " << ch_name
-      << " and measurement: " << measurement.GetName() << std::endl;
-      throw hf_exc();
+       cxcoutFHF << "Error: Failed to make Single-Channel workspace for channel: " << ch_name
+                 << " and measurement: " << measurement.GetName() << std::endl;
+       throw hf_exc();
     }
 
     // Finally, configure that workspace based on
@@ -277,8 +271,8 @@ namespace HistFactory{
     HistoToWorkspaceFactoryFast histFactory(measurement, config);
 
     // Loop over the channels and create the individual workspaces
-    vector<std::unique_ptr<RooWorkspace>> channel_workspaces;
-    vector<string>        channel_names;
+    std::vector<std::unique_ptr<RooWorkspace>> channel_workspaces;
+    std::vector<std::string> channel_names;
 
     for(HistFactory::Channel& channel : measurement.GetChannels()) {
 
@@ -317,6 +311,80 @@ Arg_t &emplace(RooWorkspace &ws, std::string const &name, Args_t &&...args)
    Arg_t arg{name.c_str(), name.c_str(), std::forward<Args_t>(args)...};
    ws.import(arg, RooFit::RecycleConflictNodes());
    return *dynamic_cast<Arg_t *>(ws.arg(name));
+}
+
+
+/// Check whether all channel workspaces contain consistent datasets.
+///
+/// This function compares the datasets stored in each channel workspace against
+/// those in the first workspace.
+///
+/// \param chs Vector of channel workspaces to compare (first is the reference).
+/// \param ch_names Names of the channels, used for error reporting.
+/// \param allowedInconsistent Dataset names that are allowed to differ between channels.
+///
+/// \return A pair consisting of:
+///   - bool: true if all channels are consistent (after ignoring allowed datasets),
+///           false otherwise.
+///   - std::string: empty if consistent; otherwise, a detailed error message
+///                  describing the inconsistencies.
+
+std::pair<bool, std::string> isChannelDataConsistent(std::vector<std::unique_ptr<RooWorkspace>> const &chs,
+                                                     std::vector<std::string> const &ch_names,
+                                                     std::set<std::string> const &allowedInconsistent)
+{
+   // Collect the reference list of dataset names from the first workspace
+   std::set<std::string> referenceDataNames;
+   for (RooAbsData *data : chs[0]->allData()) {
+      referenceDataNames.insert(data->GetName());
+   }
+
+   // Check that all other workspaces have the same datasets
+   for (std::size_t i = 1; i < chs.size(); ++i) {
+      std::set<std::string> thisDataNames;
+      for (RooAbsData *data : chs[i]->allData()) {
+         thisDataNames.insert(data->GetName());
+      }
+
+      // Find missing and extra datasets in this workspace
+      std::vector<std::string> missing;
+      std::vector<std::string> extra;
+      std::set_difference(referenceDataNames.begin(), referenceDataNames.end(), thisDataNames.begin(),
+                          thisDataNames.end(), std::back_inserter(missing));
+      std::set_difference(thisDataNames.begin(), thisDataNames.end(), referenceDataNames.begin(),
+                          referenceDataNames.end(), std::back_inserter(extra));
+
+      // Remove allowed inconsistencies
+      auto isAllowed = [&](std::string const &name) { return allowedInconsistent.count(name) != 0; };
+
+      missing.erase(std::remove_if(missing.begin(), missing.end(), isAllowed), missing.end());
+      extra.erase(std::remove_if(extra.begin(), extra.end(), isAllowed), extra.end());
+
+      if (!missing.empty() || !extra.empty()) {
+         std::stringstream errMsg;
+         errMsg << "ERROR: Inconsistent datasets across channel workspaces.\n"
+                << "Workspace for channel \"" << ch_names[i] << "\" does not match "
+                << "the datasets in channel \"" << ch_names[0] << "\".\n";
+
+         if (!missing.empty()) {
+            errMsg << "  Missing datasets:\n";
+            for (const auto &name : missing) {
+               errMsg << "    - " << name << "\n";
+            }
+         }
+
+         if (!extra.empty()) {
+            errMsg << "  Extra datasets:\n";
+            for (const auto &name : extra) {
+               errMsg << "    - " << name << "\n";
+            }
+         }
+
+         errMsg << "All channel workspaces must contain exactly the same datasets.\n";
+         return {false, errMsg.str()};
+      }
+   }
+   return {true, ""};
 }
 
 } // namespace
@@ -615,7 +683,7 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
        assert(lowVec.size() == params.size());
 
        FlexibleInterpVar interp( (interpName).c_str(), "", params, 1., lowVec, highVec);
-       interp.setAllInterpCodes(4); // LM: change to 4 (piece-wise exponential to 6th order polynomial interpolation + exponential extrapolation )
+       interp.setAllInterpCodes(5); // LM: change to 5 (piece-wise exponential to 6th order polynomial interpolation + exponential extrapolation )
        //interp.setAllInterpCodes(0); // simple linear interpolation
        proto.import(interp); // params have already been imported in first loop of this function
     } else{
@@ -748,9 +816,9 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     }
 
     if( ! channel.CheckHistograms() ) {
-      std::cout << "MakeSingleChannelWorkspace: Channel: " << channel.GetName()
-                      << " has uninitialized histogram pointers" << std::endl;
-      throw hf_exc();
+       cxcoutFHF << "MakeSingleChannelWorkspace: Channel: " << channel.GetName()
+                 << " has uninitialized histogram pointers" << std::endl;
+       throw hf_exc();
     }
 
 
@@ -759,9 +827,6 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     vector<string> systToFix = measurement.GetConstantParams();
     bool doRatio=false;
 
-    // to time the macro
-    TStopwatch t;
-    t.Start();
     //ES// string channel_name=summary[0].channel;
     string channel_name = channel.GetName();
 
@@ -796,8 +861,7 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     //
     auto protoOwner = std::make_unique<RooWorkspace>(channel_name.c_str(), (channel_name+" workspace").c_str());
     RooWorkspace &proto = *protoOwner;
-    auto proto_config = make_unique<ModelConfig>("ModelConfig", &proto);
-    proto_config->SetWorkspace(proto);
+    auto proto_config = std::make_unique<ModelConfig>("ModelConfig", &proto);
 
     // preprocess functions
     for(auto const& func : fPreprocessFunctions){
@@ -815,8 +879,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     std::vector<std::vector<RooAbsArg*>> allSampleHistFuncs;
     std::vector<RooProduct*> sampleScaleFactors;
 
-    std::vector< pair<string,string> >   statNamePairs;
-    std::vector< pair<const TH1*, std::unique_ptr<TH1>> > statHistPairs; // <nominal, error>
+    std::vector<std::pair<string, string>> statNamePairs;
+    std::vector<std::pair<const TH1 *, std::unique_ptr<TH1>>> statHistPairs; // <nominal, error>
     const std::string statFuncName = "mc_stat_" + channel_name;
 
     string prefix;
@@ -919,9 +983,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       if( sample.GetStatError().GetActivate() ) {
 
         if( fObsNameVec.size() > 3 ) {
-          cxcoutF(HistFactory) << "Cannot include Stat Error for histograms of more than 3 dimensions."
-              << std::endl;
-          throw hf_exc();
+           cxcoutFHF << "Cannot include Stat Error for histograms of more than 3 dimensions." << std::endl;
+           throw hf_exc();
         } else {
 
           // If we are using StatUncertainties, we multiply this object
@@ -985,9 +1048,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
             // Get a RooArgSet of the observables:
             // Names in the list fObsNameVec:
             RooArgList theObservables;
-            std::vector<std::string>::iterator itr = fObsNameVec.begin();
-            for (int idx=0; itr!=fObsNameVec.end(); ++itr, ++idx ) {
-              theObservables.add( *proto.var(*itr) );
+            for (const auto &obsName : fObsNameVec) {
+              theObservables.add( *proto.var(obsName) );
             }
 
             // Create the list of terms to
@@ -1019,9 +1081,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       if( !sample.GetShapeFactorList().empty() ) {
 
         if( fObsNameVec.size() > 3 ) {
-          cxcoutF(HistFactory) << "Cannot include Stat Error for histograms of more than 3 dimensions."
-              << std::endl;
-          throw hf_exc();
+           cxcoutFHF << "Cannot include Stat Error for histograms of more than 3 dimensions." << std::endl;
+           throw hf_exc();
         } else {
 
           cxcoutI(HistFactory) << "Sample: "     << sample.GetName() << " in channel: " << channel_name
@@ -1040,13 +1101,17 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
               }
 
               // Create the Parameters
-              std::string funcParams = "gamma_" + shapeFactor.GetName();
-
-              // GHL: Again, we are putting hard ranges on the gamma's
-              //      We should change this to range from 0 to /inf
-              RooArgList shapeFactorParams = ParamHistFunc::createParamSet(proto,
-                  funcParams,
-                  theObservables, defaultGammaMin, defaultShapeFactorGammaMax);
+              RooArgList shapeFactorParams =
+                 ParamHistFunc::createParamSet(proto, "gamma_" + shapeFactor.GetName(), theObservables);
+              for (auto *comp : shapeFactorParams) {
+                 // If the gamma is subject to a preprocess function, it is a RooAbsReal and
+                 // we don't need to set the initial value.
+                 if (auto var = dynamic_cast<RooRealVar *>(comp)) {
+                    var->setVal(shapeFactor.GetVal());
+                    var->setMin(shapeFactor.GetLow());
+                    var->setMax(shapeFactor.GetHigh());
+                 }
+              }
 
               // Create the Function
               ParamHistFunc shapeFactorFunc( funcName.c_str(), funcName.c_str(),
@@ -1087,9 +1152,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       if( !sample.GetShapeSysList().empty() ) {
 
         if( fObsNameVec.size() > 3 ) {
-          cxcoutF(HistFactory) << "Cannot include Stat Error for histograms of more than 3 dimensions."
-              << std::endl;
-          throw hf_exc();
+           cxcoutFHF << "Cannot include Stat Error for histograms of more than 3 dimensions.\n";
+           throw hf_exc();
         }
 
           // List of ShapeSys ParamHistFuncs
@@ -1211,11 +1275,11 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
 
       // Create the histogram of (binwise)
       // stat uncertainties:
-      unique_ptr<TH1> fracStatError( MakeScaledUncertaintyHist( channel_name + "_StatUncert" + "_RelErr", statHistPairs) );
+      std::unique_ptr<TH1> fracStatError(
+         MakeScaledUncertaintyHist(channel_name + "_StatUncert" + "_RelErr", statHistPairs));
       if( fracStatError == nullptr ) {
-        cxcoutE(HistFactory) << "Error: Failed to make ScaledUncertaintyHist for: "
-            << channel_name + "_StatUncert" + "_RelErr" << std::endl;
-        throw hf_exc();
+         cxcoutFHF << "Error: Failed to make ScaledUncertaintyHist for: " << channel_name + "_StatUncert" + "_RelErr\n";
+         throw hf_exc();
       }
 
       // Using this TH1* of fractinal stat errors,
@@ -1282,9 +1346,9 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     for(unsigned int i=0; i<constraintTermNames.size(); ++i){
       RooAbsArg* proto_arg = proto.arg(constraintTermNames[i]);
       if( proto_arg==nullptr ) {
-        cxcoutF(HistFactory) << "Error: Cannot find arg set: " << constraintTermNames.at(i)
-            << " in workspace: " << proto.GetName() << std::endl;
-        throw hf_exc();
+         cxcoutFHF << "Error: Cannot find arg set: " << constraintTermNames.at(i)
+                   << " in workspace: " << proto.GetName() << std::endl;
+         throw hf_exc();
       }
       constraintTerms.add( *proto_arg );
       //  constraintTerms.add(* proto_arg(proto.arg(constraintTermNames[i].c_str())) );
@@ -1292,9 +1356,9 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     for(unsigned int i=0; i<likelihoodTermNames.size(); ++i){
       RooAbsArg* proto_arg = (proto.arg(likelihoodTermNames[i]));
       if( proto_arg==nullptr ) {
-        cxcoutF(HistFactory) << "Error: Cannot find arg set: " << likelihoodTermNames.at(i)
-            << " in workspace: " << proto.GetName() << std::endl;
-        throw hf_exc();
+         cxcoutFHF << "Error: Cannot find arg set: " << likelihoodTermNames.at(i)
+                   << " in workspace: " << proto.GetName() << std::endl;
+         throw hf_exc();
       }
       likelihoodTerms.add( *proto_arg );
     }
@@ -1323,10 +1387,10 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
         << "\timport model into workspace"
         << "\n-----------------------------------------\n" << std::endl;
 
-    auto model = make_unique<RooProdPdf>(
-        ("model_"+channel_name).c_str(),    // MB : have changed this into conditional pdf. Much faster for toys!
-        "product of Poissons across bins for a single channel",
-        constraintTerms, RooFit::Conditional(likelihoodTerms,observables));
+    auto model = std::make_unique<RooProdPdf>(
+       ("model_" + channel_name).c_str(), // MB : have changed this into conditional pdf. Much faster for toys!
+       "product of Poissons across bins for a single channel", constraintTerms,
+       RooFit::Conditional(likelihoodTerms, observables));
     // can give channel a title by setting title of corresponding data histogram
     if (channel.GetData().GetHisto() && strlen(channel.GetData().GetHisto()->GetTitle())>0) {
        model->SetTitle(channel.GetData().GetHisto()->GetTitle());
@@ -1356,7 +1420,7 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       // actually create the files with the stored per-channel workspaces.
       // Otherwise, we just spend time calculating something that gets thrown
       // away anyway (for the combined workspace, we'll create a new Asimov).
-      unique_ptr<RooAbsData> asimov_dataset(AsymptoticCalculator::GenerateAsimovData(*model, observables));
+      std::unique_ptr<RooAbsData> asimov_dataset(AsymptoticCalculator::GenerateAsimovData(*model, observables));
       proto.import(*asimov_dataset, RooFit::Rename("asimovData"));
     }
 
@@ -1379,17 +1443,17 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
 
     for(auto const& data : channel.GetAdditionalData()) {
       if(data.GetName().empty()) {
-        cxcoutF(HistFactory) << "Error: Additional Data histogram for channel: " << channel.GetName()
-                << " has no name! The name always needs to be set for additional datasets, "
-                << "either via the \"Name\" tag in the XML or via RooStats::HistFactory::Data::SetName()." << std::endl;
-        throw hf_exc();
+         cxcoutFHF << "Error: Additional Data histogram for channel: " << channel.GetName()
+                   << " has no name! The name always needs to be set for additional datasets, "
+                   << "either via the \"Name\" tag in the XML or via RooStats::HistFactory::Data::SetName().\n";
+         throw hf_exc();
       }
       std::string const& dataName = data.GetName();
       TH1 const* mnominal = data.GetHisto();
       if( !mnominal ) {
-        cxcoutF(HistFactory) << "Error: Additional Data histogram for channel: " << channel.GetName()
-                << " with name: " << dataName << " is nullptr" << std::endl;
-        throw hf_exc();
+         cxcoutFHF << "Error: Additional Data histogram for channel: " << channel.GetName()
+                   << " with name: " << dataName << " is nullptr\n";
+         throw hf_exc();
       }
 
       // THis works and is natural, but the memory size of the simultaneous dataset grows exponentially with channels
@@ -1484,18 +1548,23 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
         Error("MakeCombinedModel","Input vector of workspace has an invalid size - return a nullptr");
         return nullptr;
      }
+     std::set<std::string> ch_names_set{ch_names.begin(), ch_names.end()};
+     if (ch_names.size() != ch_names_set.size()) {
+        Error("MakeCombinedModel", "Input vector of channel names has duplicate names - return a nullptr");
+        return nullptr;
+     }
 
     //
     /// These things were used for debugging. Maybe useful in the future
     //
 
-    map<string, RooAbsPdf*> pdfMap;
-    vector<RooAbsPdf*> models;
+     std::map<string, RooAbsPdf *> pdfMap;
+     vector<RooAbsPdf *> models;
 
-    RooArgList obsList;
-    for(unsigned int i = 0; i< ch_names.size(); ++i){
-      obsList.add(*static_cast<ModelConfig *>(chs[i]->obj("ModelConfig"))->GetObservables());
-    }
+     RooArgList obsList;
+     for (unsigned int i = 0; i < ch_names.size(); ++i) {
+        obsList.add(*static_cast<ModelConfig *>(chs[i]->obj("ModelConfig"))->GetObservables());
+     }
     cxcoutI(HistFactory) <<"full list of observables:\n" << obsList << std::endl;
 
     RooArgSet globalObs;
@@ -1513,10 +1582,14 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       RooWorkspace * ch=chs[i].get();
 
       RooAbsPdf* model = ch->pdf("model_"+channel_name);
-      if(!model) std::cout <<"failed to find model for channel"<< std::endl;
-      //      std::cout << "int = " << model->createIntegral(*obsN)->getVal() << std::endl;
+      if (!model) {
+         cxcoutFHF << "failed to find model for channel\n";
+         throw hf_exc();
+      }
       models.push_back(model);
-      globalObs.add(*ch->set("globalObservables"), /*silent=*/true); // silent because observables might exist in other channel.
+      auto &modelConfig = *static_cast<ModelConfig *>(chs[i]->obj("ModelConfig"));
+      // silent because observables might exist in other channel:
+      globalObs.add(*modelConfig.GetGlobalObservables(), /*silent=*/true);
 
       //      constrainedParams->add( * ch->set("constrainedParams") );
       pdfMap[channel_name]=model;
@@ -1542,6 +1615,17 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
     combined->defineSet("observables",{obsList, channelCat}, /*importMissing=*/true);
     combined_config->SetObservables(*combined->set("observables"));
 
+    // Check if the channel datasets are consistent
+    {
+      bool isConsistent = false;
+      std::string errMsg;
+      std::set<std::string> allowedInconsistent{"asimovData"};
+      std::tie(isConsistent, errMsg) = isChannelDataConsistent(chs, ch_names, allowedInconsistent);
+      if (!isConsistent) {
+        cxcoutFHF << errMsg;
+        throw hf_exc();
+      }
+    }
 
     // Now merge the observable datasets across the channels
     for(RooAbsData * data : chs[0]->allData()) {
@@ -1622,8 +1706,8 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       combined->import( *asimov_combined, RooFit::Rename("asimovData"));
     }
     else {
-      std::cout << "Error: Failed to create combined asimov dataset" << std::endl;
-      throw hf_exc();
+       cxcoutFHF << "Error: Failed to create combined asimov dataset\n";
+       throw hf_exc();
     }
 
     return RooFit::makeOwningPtr(std::move(combined));
@@ -1655,23 +1739,19 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
 
       // Check that histError != NAN
       if( histError != histError ) {
-   std::cout << "Warning: In histogram " << Nominal->GetName()
-        << " bin error for bin " << i_bin
-        << " is NAN.  Not using Error!!!"
-        << std::endl;
-   throw hf_exc();
-   //histError = sqrt( histContent );
-   //histError = 0;
+         cxcoutFHF << "Warning: In histogram " << Nominal->GetName() << " bin error for bin " << i_bin
+                   << " is NAN.  Not using Error!!!\n";
+         throw hf_exc();
+         // histError = sqrt( histContent );
+         // histError = 0;
       }
 
       // Check that histError ! < 0
       if( histError < 0  ) {
-   std::cout << "Warning: In histogram " << Nominal->GetName()
-        << " bin error for bin " << binNumber
-        << " is < 0.  Setting Error to 0"
-        << std::endl;
-   //histError = sqrt( histContent );
-   histError = 0;
+         cxcoutWHF << "Warning: In histogram " << Nominal->GetName() << " bin error for bin " << binNumber
+                   << " is < 0.  Setting Error to 0" << std::endl;
+         // histError = sqrt( histContent );
+         histError = 0;
       }
 
       ErrorHist->SetBinContent( binNumber, histError );
@@ -1744,10 +1824,9 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
       double histError  = error->GetBinContent( binNumber );
 
       if( histError != histError ) {
-        cxcoutE(HistFactory) << "In histogram " << error->GetName()
-        << " bin error for bin " << binNumber
-        << " is NAN.  Not using error!!";
-        throw hf_exc();
+         cxcoutFHF << "In histogram " << error->GetName() << " bin error for bin " << binNumber
+                   << " is NAN.  Not using error!!";
+         throw hf_exc();
       }
 
       TotalBinContent.at(i_bins) += histValue;
@@ -1813,7 +1892,4 @@ RooArgList HistoToWorkspaceFactoryFast::createObservables(const TH1 *hist, RooWo
   return std::unique_ptr<TH1>(ErrorHist);
 }
 
-
-} // namespace RooStats
-} // namespace HistFactory
-
+} // namespace RooStats::HistFactory

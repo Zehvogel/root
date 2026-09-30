@@ -1,13 +1,13 @@
 /// \file ROOT/RFile.hxx
-/// \ingroup Base ROOT7
 /// \author Giacomo Parolini <giacomo.parolini@cern.ch>
 /// \date 2025-03-19
-/// \warning This is part of the ROOT 7 prototype! It will change without notice. It might trigger earthquakes. Feedback
+/// \warning This is part of the ROOT 7 prototype! It will change without notice. Feedback
 /// is welcome!
 
 #ifndef ROOT7_RFile
 #define ROOT7_RFile
 
+#include <Compression.h>
 #include <ROOT/RError.hxx>
 
 #include <deque>
@@ -36,6 +36,8 @@ ROOT::RLogChannel &RFileLog();
 /// This method is meant to only be used by the pythonization.
 [[nodiscard]] void *RFile_GetObjectFromKey(RFile &file, const RKeyInfo &key);
 
+TFile *GetRFileTFile(RFile &rfile);
+
 } // namespace Internal
 
 namespace Detail {
@@ -56,7 +58,7 @@ class RFileKeyIterable;
 
 /**
 \class ROOT::Experimental::RKeyInfo
-\ingroup RFile
+\ingroup io_files
 \brief Information about an RFile object's Key.
 
 Every object inside a ROOT file has an associated "Key" which contains metadata on the object, such as its name, type
@@ -81,8 +83,17 @@ private:
    std::string fClassName;
    std::uint16_t fCycle = 0;
    ECategory fCategory = ECategory::kInvalid;
+   std::uint64_t fLenObj = 0;
+   std::uint64_t fNBytesObj = 0;
+   std::uint64_t fNBytesKey = 0;
+   std::uint64_t fSeekKey = 0;
+   std::uint64_t fSeekParentDir = 0;
+
+   explicit RKeyInfo(const TKey &key);
 
 public:
+   RKeyInfo() = default;
+
    /// Returns the absolute path of this key, i.e. the directory part plus the object name.
    const std::string &GetPath() const { return fPath; }
    /// Returns the base name of this key, i.e. the name of the object without the directory part.
@@ -91,6 +102,19 @@ public:
    const std::string &GetClassName() const { return fClassName; }
    std::uint16_t GetCycle() const { return fCycle; }
    ECategory GetCategory() const { return fCategory; }
+   /// Returns the in-memory size of the uncompressed object.
+
+   std::uint64_t GetLenObj() const { return fLenObj; }
+   /// Returns the on-disk size of the (potentially compressed) object, excluding its key.
+   std::uint64_t GetNBytesObj() const { return fNBytesObj; }
+
+   /// Returns the on-disk size of this object's key.
+   std::uint64_t GetNBytesKey() const { return fNBytesKey; }
+   /// Returns the on-disk offset of this object's key.
+   std::uint64_t GetSeekKey() const { return fSeekKey; }
+
+   /// Returns the on-disk offset of this object's parent directory key.
+   std::uint64_t GetSeekParentDir() const { return fSeekParentDir; }
 };
 
 /// The iterable returned by RFile::ListKeys()
@@ -161,8 +185,11 @@ public:
 
 /**
 \class ROOT::Experimental::RFile
-\ingroup RFile
+\ingroup io_files
 \brief An interface to read from, or write to, a ROOT file, as well as performing other common operations.
+
+Please refer to the documentation of TFile for the details related to how data and executable code can be stored
+in ROOT files.
 
 ## When and why should you use RFile
 
@@ -224,6 +251,7 @@ auto myObj = file->Get<TH1D>("h");
 */
 class RFile final {
    friend void *Internal::RFile_GetObjectFromKey(RFile &file, const RKeyInfo &key);
+   friend TFile *Internal::GetRFileTFile(RFile &rfile);
 
    /// Flags used in PutInternal()
    enum PutFlags {
@@ -265,6 +293,14 @@ public:
       kListRecursive = 1 << 2,
    };
 
+   struct RRecreateOptions {
+      /// See core/zip/inc/Compression.h for the meaning of the `compression` argument.
+      /// Default compression is 505 (ZSTD level 10).
+      int fCompressionSettings = ROOT::RCompressionSetting::EDefaults::kUseGeneralPurpose;
+
+      RRecreateOptions();
+   };
+
    // This is arbitrary, but it's useful to avoid pathological cases
    static constexpr int kMaxPathNesting = 1000;
 
@@ -277,7 +313,7 @@ public:
    /// Opens the file for reading/writing, overwriting it if it already exists.
    /// \throw ROOT::RException if a file could not be created at `path` (e.g. if the specified
    /// directory tree does not exist).
-   static std::unique_ptr<RFile> Recreate(std::string_view path);
+   static std::unique_ptr<RFile> Recreate(std::string_view path, const RRecreateOptions &opts = RRecreateOptions());
 
    /// Opens the file for updating, creating a new one if it doesn't exist.
    /// \throw ROOT::RException if the file at `path` could neither be read nor created
@@ -340,6 +376,7 @@ public:
    /// `basePath` (defaulting to include the content of all subdirectories).
    /// By default, keys referring to directories are not returned: only those referring to leaf objects are.
    /// If `basePath` is the path of a leaf object, only `basePath` itself will be returned.
+   /// If `basePath` is the path of a directory, it won't appear in the listing.
    /// `flags` is a bitmask specifying the listing mode.
    /// If `(flags & kListObjects) != 0`, the listing will include keys of non-directory objects (default);
    /// If `(flags & kListDirs) != 0`, the listing will include keys of directory objects;

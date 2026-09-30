@@ -334,13 +334,13 @@ private:
 };
 
 
-// CLING WORKAROUND -- classes for STL iterators are completely undefined in that
+// Cling WORKAROUND -- classes for STL iterators are completely undefined in that
 // they come in a bazillion different guises, so just do whatever
 class STLIteratorConverter : public Converter {
 public:
     bool SetArg(PyObject*, Parameter&, CallContext* = nullptr) override;
 };
-// -- END CLING WORKAROUND
+// -- END Cling WORKAROUND
 
 
 class VoidPtrRefConverter : public Converter {
@@ -408,13 +408,16 @@ public:
 protected:
     std::string fRetType;
     std::string fSignature;
+    bool fAllowCppInstance = false;
 };
 
 // std::function
 class StdFunctionConverter : public FunctionPointerConverter {
 public:
     StdFunctionConverter(Converter* cnv, const std::string& ret, const std::string& sig) :
-        FunctionPointerConverter(ret, sig), fConverter(cnv) {}
+        FunctionPointerConverter(ret, sig), fConverter(cnv) {
+        fAllowCppInstance = true;
+    }
     StdFunctionConverter(const StdFunctionConverter&) = delete;
     StdFunctionConverter& operator=(const StdFunctionConverter&) = delete;
     virtual ~StdFunctionConverter() { delete fConverter; }
@@ -476,13 +479,6 @@ protected:
     std::string       fValueTypeName;
     Cppyy::TCppType_t fValueType;
     size_t            fValueSize;
-};
-
-
-// raising converter to take out overloads
-class NotImplementedConverter : public Converter {
-public:
-    bool SetArg(PyObject*, Parameter&, CallContext* = nullptr) override;
 };
 
 } // unnamed namespace

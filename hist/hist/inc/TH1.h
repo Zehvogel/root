@@ -553,7 +553,7 @@ public:
    virtual void     GetStats(Double_t *stats) const;
    virtual Double_t GetStdDev(Int_t axis=1) const;
    virtual Double_t GetStdDevError(Int_t axis=1) const;
-   Double_t         GetSumOfAllWeights(const bool includeOverflow) const;
+   Double_t         GetSumOfAllWeights(const bool includeOverflow, Double_t * sumWeightSquare = nullptr) const;
    /// Return the sum of weights across all bins excluding under/overflows.
    /// \see TH1::GetSumOfAllWeights()
    virtual Double_t GetSumOfWeights() const { return GetSumOfAllWeights(false); }
@@ -862,7 +862,7 @@ public:
 
 protected:
    Double_t RetrieveBinContent(Int_t bin) const override { return Double_t (fArray[bin]); }
-   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Int_t (content); }
+   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Long64_t (content); }
 };
 
 TH1L operator*(Double_t c1, const TH1L &h1);

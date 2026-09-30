@@ -344,7 +344,7 @@ public:
    DisplacementVector3D Unit() const
    {
       SCALAR tot = R();
-      tot(tot == SCALAR(0)) = SCALAR(1);
+      where(tot == SCALAR(0), tot) = SCALAR(1);
       return DisplacementVector3D(*this) / tot;
    }
 
@@ -628,7 +628,7 @@ operator-(DisplacementVector3D<CoordSystem1, U> v1, DisplacementVector3D<CoordSy
    return v1 -= v2;
 }
 
-// #endif // not __CINT__
+// #endif // not __CLING__
 
 /**
    Multiplication of a displacement vector by real number  a*v
@@ -681,7 +681,7 @@ operator<<(std::basic_ostream<char_t, traits_t> &os, DisplacementVector3D<T, U> 
 {
    if (os) {
       os << "{ ";
-      for (std::size_t i = 0; i < PositionVector3D<T, U>::Scalar::Size; ++i) {
+      for (std::size_t i = 0; i < PositionVector3D<T, U>::Scalar::size(); ++i) {
          os << "(" << v.x()[i] << "," << v.y()[i] << "," << v.z()[i] << ") ";
       }
       os << "}";

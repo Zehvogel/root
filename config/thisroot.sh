@@ -39,27 +39,22 @@ clean_environment()
       fi
       if [ -n "${LD_LIBRARY_PATH-}" ]; then
          drop_from_path "$LD_LIBRARY_PATH" "${old_rootsys}/lib"
-         drop_from_path "$LD_LIBRARY_PATH" "${old_rootsys}/lib/root"
+         drop_from_path "$newpath" "${old_rootsys}/lib/root"
          LD_LIBRARY_PATH=$newpath
       fi
       if [ -n "${DYLD_LIBRARY_PATH-}" ]; then
          drop_from_path "$DYLD_LIBRARY_PATH" "${old_rootsys}/lib"
-         drop_from_path "$DYLD_LIBRARY_PATH" "${old_rootsys}/lib/root"
+         drop_from_path "$newpath" "${old_rootsys}/lib/root"
          DYLD_LIBRARY_PATH=$newpath
       fi
       if [ -n "${SHLIB_PATH-}" ]; then
          drop_from_path "$SHLIB_PATH" "${old_rootsys}/lib"
-         drop_from_path "$SHLIB_PATH" "${old_rootsys}/lib/root"
+         drop_from_path "$newpath" "${old_rootsys}/lib/root"
          SHLIB_PATH=$newpath
-      fi
-      if [ -n "${LIBPATH-}" ]; then
-         drop_from_path "$LIBPATH" "${old_rootsys}/lib"
-         drop_from_path "$LIBPATH" "${old_rootsys}/lib/root"
-         LIBPATH=$newpath
       fi
       if [ -n "${PYTHONPATH-}" ]; then
          drop_from_path "$PYTHONPATH" "${old_rootsys}/lib"
-         drop_from_path "$PYTHONPATH" "${old_rootsys}/lib/root"
+         drop_from_path "$newpath" "${old_rootsys}/lib/root"
          PYTHONPATH=$newpath
       fi
       if [ -n "${MANPATH-}" ]; then
@@ -77,6 +72,11 @@ clean_environment()
       if [ -n "${JUPYTER_CONFIG_PATH-}" ]; then
          drop_from_path "$JUPYTER_CONFIG_PATH" "${old_rootsys}/etc/notebook"
          JUPYTER_CONFIG_PATH=$newpath
+      fi
+      # Potential leftovers from ROOT < v6.36
+      if [ -n "${JUPYTER_CONFIG_DIR-}" ]; then
+         drop_from_path "$JUPYTER_CONFIG_DIR" "${old_rootsys}/etc/notebook"
+         JUPYTER_CONFIG_DIR=$newpath
       fi
    fi
    if [ -z "${MANPATH-}" ]; then
@@ -125,14 +125,6 @@ set_environment()
    else
       SHLIB_PATH=@libdir@:$SHLIB_PATH
       export SHLIB_PATH
-   fi
-
-   if [ -z "${LIBPATH-}" ]; then
-      LIBPATH=@libdir@
-      export LIBPATH       # Linux, ELF HP-UX
-   else
-      LIBPATH=@libdir@:$LIBPATH
-      export LIBPATH
    fi
 
    if [ -z "${PYTHONPATH-}" ]; then

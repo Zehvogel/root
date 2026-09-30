@@ -1,27 +1,22 @@
 <!DOCTYPE html>
 <html lang="en">
-   <head>
-      <meta charset="utf-8">
-      <title>Read a ROOT file</title>
-      <link rel="shortcut icon" href="img/RootIcon.ico"/>
-      <script type="importmap">
-         {
-            "imports": {
-               "jsroot": "./modules/main.mjs"
-            }
-         }
-      </script>
-
-   </head>
-   <body>
-      <div id="simpleGUI" path="../files/" files="ct.root;exclusion.root;fillrandom.root;glbox.root;graph.root;hsimple.root;legends.root;rf107.root;stacks.root;zdemo.root">
-         loading modules ...
-      </div>
-      <script type="module">
-         import { buildGUI } from 'jsroot';
-         buildGUI('simpleGUI');
-      </script>
-   </body>
+<head>
+   <meta charset="utf-8">
+   <title>Read a ROOT file</title>
+   <link rel="shortcut icon" href="img/RootIcon.ico"/>
+   <script type="importmap">
+      { "imports": { "jsroot": "./modules/main.mjs" } }
+   </script>
+</head>
+<body>
+   <div id="simpleGUI" path="https://root.cern/js/files/" files="ct.root;exclusion.root;fillrandom.root;glbox.root;graph.root;hsimple.root;legends.root;rf107.root;stacks.root;zdemo.root">
+      loading modules ...
+   </div>
+   <script type="module">
+      import { buildGUI } from 'jsroot';
+      buildGUI('simpleGUI');
+   </script>
+</body>
 </html>
 
 <!--
@@ -50,7 +45,7 @@ Several URL parameters could be specified when opening page:
 
 Example:
 
-    https://root.cern/js/latest/?file=../files/hsimple.root&layout=grid2x2&item=[hpx;1,hpxpy;1]&opts=[,colz]
+    https://root.cern/js/latest/?file=https://root.cern/js/files/hsimple.root&layout=grid2x2&item=[hpx;1,hpxpy;1]&opts=[,colz]
 
 Page can be used to open files from other web servers like:
 

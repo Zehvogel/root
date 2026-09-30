@@ -1,8 +1,8 @@
 /// \file RFieldBase.cxx
-/// \ingroup NTuple
 /// \author Jonas Hahnfeld <jonas.hahnfeld@cern.ch>
 /// \date 2024-11-19
 
+#include <ROOT/BitUtils.hxx>
 #include <ROOT/RError.hxx>
 #include <ROOT/RField.hxx>
 #include <ROOT/RFieldBase.hxx>
@@ -96,6 +96,13 @@ ROOT::Internal::CallFieldBaseCreate(const std::string &fieldName, const std::str
 
 //------------------------------------------------------------------------------
 
+void ROOT::RFieldBase::RDeleter::DeleteAligned(void *objPtr) const
+{
+   operator delete(objPtr, std::align_val_t(fAlignment));
+}
+
+//------------------------------------------------------------------------------
+
 ROOT::RFieldBase::RColumnRepresentations::RColumnRepresentations()
 {
    // A single representations with an empty set of columns
@@ -168,7 +175,7 @@ void ROOT::RFieldBase::RBulkValues::ReleaseValues()
       }
    }
 
-   operator delete(fValues);
+   operator delete(fValues, std::align_val_t(fField->GetAlignment()));
 }
 
 void ROOT::RFieldBase::RBulkValues::Reset(RNTupleLocalIndex firstIndex, std::size_t size)
@@ -178,7 +185,7 @@ void ROOT::RFieldBase::RBulkValues::Reset(RNTupleLocalIndex firstIndex, std::siz
          throw RException(R__FAIL("invalid attempt to bulk read beyond the adopted buffer"));
       }
       ReleaseValues();
-      fValues = operator new(size * fValueSize);
+      fValues = operator new(size * fValueSize, std::align_val_t(fField->GetAlignment()));
 
       if (!(fField->GetTraits() & RFieldBase::kTraitTriviallyConstructible)) {
          for (std::size_t i = 0; i < size; ++i) {
@@ -431,7 +438,6 @@ ROOT::RFieldBase::Create(const std::string &fieldName, const std::string &typeNa
       } else if (resolvedType.substr(0, 24) == "std::unordered_multiset<") {
          std::string itemTypeName = resolvedType.substr(24, resolvedType.length() - 25);
          auto itemField = Create("_0", itemTypeName, options, desc, maybeGetChildId(0)).Unwrap();
-         auto normalizedInnerTypeName = itemField->GetTypeName();
          result = std::make_unique<RSetField>(fieldName, RSetField::ESetType::kUnorderedMultiSet, std::move(itemField));
       } else if (resolvedType.substr(0, 9) == "std::map<") {
          auto innerTypes = TokenizeTypeList(resolvedType.substr(9, resolvedType.length() - 10));
@@ -486,13 +492,6 @@ ROOT::RFieldBase::Create(const std::string &fieldName, const std::string &typeNa
       }
 
       if (!result) {
-         auto e = TEnum::GetEnum(resolvedType.c_str());
-         if (e != nullptr) {
-            result = std::make_unique<REnumField>(fieldName, typeName);
-         }
-      }
-
-      if (!result) {
          auto cl = TClass::GetClass(typeName.c_str());
 
          if (cl && cl->GetState() > TClass::kForwardDeclared) {
@@ -505,8 +504,10 @@ ROOT::RFieldBase::Create(const std::string &fieldName, const std::string &typeNa
             // rather than from TClass. This might be desirable in the future, but for now in this
             // situation we rely on field emulation instead.
             else if (cl->GetState() >= TClass::kInterpreted) {
-               if (ROOT::Internal::GetRNTupleSerializationMode(cl) ==
-                   ROOT::Internal::ERNTupleSerializationMode::kForceStreamerMode) {
+               if (!ROOT::Internal::GetRNTupleSoARecord(cl).empty()) {
+                  result = std::make_unique<ROOT::Experimental::RSoAField>(fieldName, typeName);
+               } else if (ROOT::Internal::GetRNTupleSerializationMode(cl) ==
+                          ROOT::Internal::ERNTupleSerializationMode::kForceStreamerMode) {
                   result = std::make_unique<RStreamerField>(fieldName, typeName);
                } else {
                   result = std::make_unique<RClassField>(fieldName, typeName);
@@ -545,7 +546,22 @@ ROOT::RFieldBase::Create(const std::string &fieldName, const std::string &typeNa
                   ROOT::Internal::CreateEmulatedVectorField(fieldName, std::move(itemField), fieldDesc.GetTypeName());
                vecField->fTypeAlias = fieldDesc.GetTypeAlias();
                return vecField;
+            } else if (ROOT::Internal::IsCustomEnumFieldDesc(*desc, fieldDesc)) {
+               R__ASSERT(!fieldDesc.GetLinkIds().empty());
+               auto underlyingIntFieldId = fieldDesc.GetLinkIds()[0];
+               const auto &underlyingIntFieldDesc = desc->GetFieldDescriptor(underlyingIntFieldId);
+               auto enumField = ROOT::Internal::CreateEmulatedEnumField(fieldName, fieldDesc.GetTypeName(),
+                                                                        underlyingIntFieldDesc.GetTypeName());
+               enumField->fTypeAlias = fieldDesc.GetTypeAlias();
+               return enumField;
             }
+         }
+      }
+
+      if (!result) {
+         auto e = TEnum::GetEnum(resolvedType.c_str());
+         if (e != nullptr) {
+            result = std::make_unique<REnumField>(fieldName, typeName);
          }
       }
    } catch (const RException &e) {
@@ -631,7 +647,15 @@ std::size_t ROOT::RFieldBase::ReadBulkImpl(const RBulkSpec &bulkSpec)
 
 void *ROOT::RFieldBase::CreateObjectRawPtr() const
 {
-   void *where = operator new(GetValueSize());
+   const auto align = GetAlignment();
+   void *where;
+   if (align <= sizeof(std::max_align_t)) {
+      // We use the normal operator new for regularly aligned types to not complicate the user code that
+      // deletes objects returned by CreateObject()
+      where = operator new(GetValueSize());
+   } else {
+      where = operator new(GetValueSize(), std::align_val_t(GetAlignment()));
+   }
    R__ASSERT(where != nullptr);
    ConstructValue(where);
    return where;
@@ -648,26 +672,32 @@ std::vector<ROOT::RFieldBase::RValue> ROOT::RFieldBase::SplitValue(const RValue 
    return std::vector<RValue>();
 }
 
-void ROOT::RFieldBase::Attach(std::unique_ptr<ROOT::RFieldBase> child)
+void ROOT::RFieldBase::Attach(std::unique_ptr<ROOT::RFieldBase> child, std::string_view expectedChildName)
 {
-   // Note that during a model update, new fields will be attached to the zero field. The zero field, however,
-   // does not change its inital state because only its sub fields get connected by RPageSink::UpdateSchema.
-   if (fState != EState::kUnconnected)
-      throw RException(R__FAIL("invalid attempt to attach subfield to already connected field"));
+   // Note that technically the zero field would not need to have the extensible trait: because only its sub fields
+   // get connected by RPageSink::UpdateSchema, it does not change its initial state.
+   if (!(fTraits & kTraitExtensible) && (fState != EState::kUnconnected))
+      throw RException(R__FAIL("invalid attempt to attach subfield to already connected, non-extensible field"));
+
+   if (!expectedChildName.empty() && child->GetFieldName() != expectedChildName) {
+      throw RException(R__FAIL(std::string("invalid subfield name: ") + child->GetFieldName() +
+                               "   expected: " + std::string(expectedChildName)));
+   }
+
    child->fParent = this;
    fSubfields.emplace_back(std::move(child));
 }
 
 ROOT::NTupleSize_t ROOT::RFieldBase::EntryToColumnElementIndex(ROOT::NTupleSize_t globalIndex) const
 {
-   std::size_t result = globalIndex;
+   ROOT::NTupleSize_t result = globalIndex;
    for (auto f = this; f != nullptr; f = f->GetParent()) {
       auto parent = f->GetParent();
       if (parent && (parent->GetStructure() == ROOT::ENTupleStructure::kCollection ||
                      parent->GetStructure() == ROOT::ENTupleStructure::kVariant)) {
          return 0U;
       }
-      result *= std::max(f->GetNRepetitions(), std::size_t{1U});
+      result *= std::max<ROOT::NTupleSize_t>(f->GetNRepetitions(), ROOT::NTupleSize_t{1U});
    }
    return result;
 }
@@ -751,7 +781,7 @@ ROOT::RFieldBase::RBulkValues ROOT::RFieldBase::CreateBulk()
 
 ROOT::RFieldBase::RValue ROOT::RFieldBase::BindValue(std::shared_ptr<void> objPtr)
 {
-   return RValue(this, objPtr);
+   return RValue(this, std::move(objPtr));
 }
 
 std::size_t ROOT::RFieldBase::ReadBulk(const RBulkSpec &bulkSpec)
@@ -827,10 +857,7 @@ void ROOT::RFieldBase::SetColumnRepresentatives(const RColumnRepresentations::Se
       if (itRepresentative == std::end(validTypes))
          throw RException(R__FAIL("invalid column representative"));
 
-      // don't add a duplicate representation
-      if (std::find_if(fColumnRepresentatives.begin(), fColumnRepresentatives.end(),
-                       [&r](const auto &rep) { return r == rep.get(); }) == fColumnRepresentatives.end())
-         fColumnRepresentatives.emplace_back(*itRepresentative);
+      fColumnRepresentatives.emplace_back(*itRepresentative);
    }
 }
 
@@ -871,7 +898,7 @@ ROOT::RFieldBase::EnsureCompatibleColumnTypes(const ROOT::RNTupleDescriptor &des
                             "(representation index: " + std::to_string(representationIndex) + ")"));
 }
 
-size_t ROOT::RFieldBase::AddReadCallback(ReadCallback_t func)
+size_t ROOT::RFieldBase::AddReadCallback(const ReadCallback_t &func)
 {
    fReadCallbacks.push_back(func);
    fIsSimple = false;
@@ -906,8 +933,12 @@ void ROOT::RFieldBase::AutoAdjustColumnTypes(const ROOT::RNTupleWriteOptions &op
       SetColumnRepresentatives({rep});
    }
 
-   if (fTypeAlias == "Double32_t")
-      SetColumnRepresentatives({{ROOT::ENTupleColumnType::kSplitReal32}});
+   if (fTypeAlias == "Double32_t") {
+      if (options.GetCompression() != 0)
+         SetColumnRepresentatives({{ROOT::ENTupleColumnType::kSplitReal32}});
+      else
+         SetColumnRepresentatives({{ROOT::ENTupleColumnType::kReal32}});
+   }
 }
 
 void ROOT::RFieldBase::ConnectPageSink(ROOT::Internal::RPageSink &pageSink, ROOT::NTupleSize_t firstEntry)
@@ -958,9 +989,10 @@ void ROOT::RFieldBase::ConnectPageSource(ROOT::Internal::RPageSource &pageSource
       // we would need to handle it in each and every ReconcileOnDiskField()
       // Note that we have to do this before calling BeforeConnectPageSource(), which already may compare the field
       // to its on-disk description.
-      const auto &desc = pageSource.GetSharedDescriptorGuard().GetRef();
-      if (!dynamic_cast<RAtomicField *>(this) && desc.GetFieldDescriptor(GetOnDiskId()).IsStdAtomic()) {
-         SetOnDiskId(desc.GetFieldDescriptor(GetOnDiskId()).GetLinkIds()[0]);
+      auto descGuard = pageSource.GetSharedDescriptorGuard();
+      if (!dynamic_cast<RAtomicField *>(this) &&
+          Internal::IsStdAtomicFieldDesc(descGuard->GetFieldDescriptor(GetOnDiskId()))) {
+         SetOnDiskId(descGuard->GetFieldDescriptor(GetOnDiskId()).GetLinkIds()[0]);
       }
    }
 
@@ -986,8 +1018,8 @@ void ROOT::RFieldBase::ConnectPageSource(ROOT::Internal::RPageSource &pageSource
    }
 
    if (!fIsArtificial) {
-      const auto &desc = pageSource.GetSharedDescriptorGuard().GetRef();
-      ReconcileOnDiskField(desc);
+      auto descGuard = pageSource.GetSharedDescriptorGuard();
+      ReconcileOnDiskField(descGuard.GetRef());
    }
 
    for (auto &f : fSubfields) {
@@ -1059,6 +1091,14 @@ ROOT::RFieldBase::EnsureMatchingOnDiskField(const RNTupleDescriptor &desc, std::
       errMsg << " repetition count " << GetNRepetitions() << " vs. " << fieldDesc.GetNRepetitions() << ";";
    }
    return R__FAIL(errMsg.str() + "\n" + Internal::GetTypeTraceReport(*this, desc));
+}
+
+ROOT::RResult<void> ROOT::RFieldBase::EnsureMatchingOnDiskCollection(const RNTupleDescriptor &desc) const
+{
+   std::uint32_t ignoreBits = kDiffTypeName;
+   if (desc.GetFieldDescriptor(GetOnDiskId()).IsSoACollection())
+      ignoreBits |= kDiffTypeVersion;
+   return EnsureMatchingOnDiskField(desc, ignoreBits);
 }
 
 ROOT::RResult<void> ROOT::RFieldBase::EnsureMatchingTypePrefix(const RNTupleDescriptor &desc,

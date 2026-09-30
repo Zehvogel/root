@@ -6,9 +6,6 @@
 # Author: Fons Rademakers, 06/06/99
 
 readlink=readlink
-if [ `uname` = "AIX" ]; then
-   readlink=echo
-fi
 
 # work around readlink versions not having -f option
 fullpath1=`$readlink "$0"`
@@ -85,6 +82,10 @@ if echo "${features}" | grep -q "dataframe"; then
    rootlibs="$rootlibs -lROOTDataFrame"
 fi
 
+if echo "${features}" | grep -q "geom"; then
+   rootlibs="$rootlibs -lTGeometry"
+fi
+
 if test "$platform" = "win32"; then
    rootulibs="-include:_G__cpp_setupG__Net        \
               -include:_G__cpp_setupG__IO         \
@@ -154,22 +155,6 @@ cxxversionflag="@configstd@ "
 auxcflags="${cxxversionflag} "
 
 case $arch in
-aix5)
-   # IBM AIX
-   auxcflags="-qnoro -qnoroconst -qmaxmem=-1 -qrtti=all"
-   auxlibs=
-   #forcelibs=$rootulibs
-   #forceglibs=$rootuglibs
-   #forceevelibs=$rootuevelibs
-   ;;
-aixgcc)
-   # IBM AIX with g++
-   auxcflags+="-fsigned-char -fsized-deallocation"
-   auxlibs=
-   #forcelibs=$rootulibs
-   #forceglibs=$rootuglibs
-   #forceevelibs=$rootuevelibs
-   ;;
 solarisgcc)
    # Solaris g++ 2.8.x
    auxlibs="-L/usr/ccs/lib -lm -lsocket -lgen -ldl"
@@ -459,7 +444,7 @@ while test $# -gt 0; do
     --prefix=*)
       ### Set the prefix
       if test "$platform" = "win32"; then
-         ### We need to expand the path to backslash seperated path
+         ### We need to expand the path to backslash separated path
          optarg=`cygpath -u $optarg`
       fi
       prefix=$optarg
@@ -477,7 +462,7 @@ while test $# -gt 0; do
     --exec-prefix=*)
       ### Set the exec-prefix
       if test "$platform" = "win32"; then
-      ### We need to expand the path to backslash seperated path
+      ### We need to expand the path to backslash separated path
          optarg=`cygpath -u $optarg`
       fi
       exec_prefix=$optarg
@@ -531,7 +516,7 @@ while test $# -gt 0; do
       ### Output the compiler flags
       if test "${incdir}" != "/usr/include"; then
          ### In case we're on a Win32 system, we need to expand the
-         ### path to a backslash seperated path
+         ### path to a backslash separated path
          if test "$platform" = "win32"; then
             includes=-I\'`cygpath -w ${incdir}`\'
          else

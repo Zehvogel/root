@@ -82,15 +82,65 @@ TEST(RHistStats, GetDimensionStatsWeighted)
    }
 }
 
+TEST(RHistStats, DisableDimension)
+{
+   RHistStats stats(3);
+   stats.DisableDimension(1);
+   EXPECT_TRUE(stats.IsEnabled(0));
+   EXPECT_FALSE(stats.IsEnabled(1));
+   EXPECT_TRUE(stats.IsEnabled(2));
+   EXPECT_THROW(stats.GetDimensionStats(1), std::invalid_argument);
+
+   // The argument for the disabled dimension will be ignored.
+   stats.Fill(1, "b", 3);
+   stats.Fill(1, "b", 3, RWeight(1));
+   stats.Fill(4, 5, 6);
+   stats.Fill(4, 5, 6, RWeight(1));
+
+   EXPECT_EQ(stats.GetNEntries(), 4);
+   EXPECT_THROW(stats.ComputeMean(1), std::invalid_argument);
+   EXPECT_THROW(stats.ComputeVariance(1), std::invalid_argument);
+   EXPECT_THROW(stats.ComputeSkewness(1), std::invalid_argument);
+   EXPECT_THROW(stats.ComputeKurtosis(1), std::invalid_argument);
+}
+
+TEST(RHistStats, Taint)
+{
+   RHistStats stats(1);
+   stats.Taint();
+   EXPECT_TRUE(stats.IsTainted());
+
+   // Modifications are still possible.
+   stats.Add(stats);
+   stats.Fill(1);
+   stats.Scale(2.0);
+
+   // Any read access will throw.
+   EXPECT_THROW(stats.GetNEntries(), std::logic_error);
+   EXPECT_THROW(stats.GetSumW(), std::logic_error);
+   EXPECT_THROW(stats.GetSumW2(), std::logic_error);
+   EXPECT_THROW(stats.GetDimensionStats(), std::logic_error);
+   EXPECT_THROW(stats.ComputeMean(), std::logic_error);
+   EXPECT_THROW(stats.ComputeVariance(), std::logic_error);
+   EXPECT_THROW(stats.ComputeSkewness(), std::logic_error);
+   EXPECT_THROW(stats.ComputeKurtosis(), std::logic_error);
+
+   // Clear resets the object, including its taint status.
+   stats.Clear();
+   EXPECT_NO_THROW(stats.GetNEntries());
+}
+
 TEST(RHistStats, Add)
 {
-   RHistStats statsA(2);
-   RHistStats statsB(2);
+   RHistStats statsA(3);
+   RHistStats statsB(3);
+   statsA.DisableDimension(1);
+   statsB.DisableDimension(1);
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
-      statsA.Fill(i, 2 * i);
-      statsB.Fill(2 * i, 3 * i, RWeight(0.1 + 0.03 * i));
+      statsA.Fill(i, 1, 2 * i);
+      statsB.Fill(2 * i, 1, 3 * i, RWeight(0.1 + 0.03 * i));
    }
 
    statsA.Add(statsB);
@@ -107,7 +157,7 @@ TEST(RHistStats, Add)
       EXPECT_FLOAT_EQ(dimensionStats.fSumWX4, 5846915.6);
    }
    {
-      const auto &dimensionStats = statsA.GetDimensionStats(1);
+      const auto &dimensionStats = statsA.GetDimensionStats(2);
       EXPECT_FLOAT_EQ(dimensionStats.fSumWX, 659.3);
       EXPECT_FLOAT_EQ(dimensionStats.fSumWX2, 21850);
       EXPECT_FLOAT_EQ(dimensionStats.fSumWX3, 842029.46);
@@ -119,8 +169,110 @@ TEST(RHistStats, AddDifferent)
 {
    RHistStats statsA(2);
    RHistStats statsB(3);
+   RHistStats statsC(3);
+   statsC.DisableDimension(1);
 
    EXPECT_THROW(statsA.Add(statsB), std::invalid_argument);
+   EXPECT_THROW(statsB.Add(statsC), std::invalid_argument);
+   EXPECT_THROW(statsC.Add(statsB), std::invalid_argument);
+}
+
+TEST(RHistStats, AddAtomic)
+{
+   RHistStats statsA(3);
+   RHistStats statsB(3);
+   statsA.DisableDimension(1);
+   statsB.DisableDimension(1);
+
+   static constexpr std::size_t Entries = 20;
+   for (std::size_t i = 0; i < Entries; i++) {
+      statsA.Fill(i, 1, 2 * i);
+      statsB.Fill(2 * i, 1, 3 * i, RWeight(0.1 + 0.03 * i));
+   }
+
+   statsA.AddAtomic(statsB);
+
+   ASSERT_EQ(statsA.GetNEntries(), 2 * Entries);
+   EXPECT_DOUBLE_EQ(statsA.GetSumW(), 27.7);
+   EXPECT_DOUBLE_EQ(statsA.GetSumW2(), 23.563);
+
+   {
+      const auto &dimensionStats = statsA.GetDimensionStats(/*=0*/);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX, 376.2);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX2, 7790);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX3, 200019.84);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX4, 5846915.6);
+   }
+   {
+      const auto &dimensionStats = statsA.GetDimensionStats(2);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX, 659.3);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX2, 21850);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX3, 842029.46);
+      EXPECT_FLOAT_EQ(dimensionStats.fSumWX4, 35754169.6);
+   }
+}
+
+TEST(RHistStats, StressAddAtomic)
+{
+   static constexpr std::size_t NThreads = 4;
+   static constexpr std::size_t NAddsPerThread = 10000;
+   static constexpr std::size_t NAdds = NThreads * NAddsPerThread;
+   static constexpr double X = 1.5;
+   static constexpr double Weight = 0.5;
+
+   // Use a single dimension, to maximize contention.
+   RHistStats statsA(1);
+   RHistStats statsB(1);
+   statsB.Fill(X, RWeight(Weight));
+
+   StressInParallel(NThreads, [&] {
+      for (std::size_t i = 0; i < NAddsPerThread; i++) {
+         statsA.AddAtomic(statsB);
+      }
+   });
+
+   EXPECT_EQ(statsA.GetNEntries(), NAdds);
+   EXPECT_DOUBLE_EQ(statsA.GetSumW(), NAdds * Weight);
+   EXPECT_DOUBLE_EQ(statsA.GetSumW2(), NAdds * Weight * Weight);
+
+   const auto &dimensionStats = statsA.GetDimensionStats();
+   EXPECT_DOUBLE_EQ(dimensionStats.fSumWX, NAdds * Weight * X);
+   EXPECT_DOUBLE_EQ(dimensionStats.fSumWX2, NAdds * Weight * X * X);
+   EXPECT_DOUBLE_EQ(dimensionStats.fSumWX3, NAdds * Weight * X * X * X);
+   EXPECT_DOUBLE_EQ(dimensionStats.fSumWX4, NAdds * Weight * X * X * X * X);
+}
+
+TEST(RHistStats, AddAtomicDifferent)
+{
+   RHistStats statsA(2);
+   RHistStats statsB(3);
+   RHistStats statsC(3);
+   statsC.DisableDimension(1);
+
+   EXPECT_THROW(statsA.AddAtomic(statsB), std::invalid_argument);
+   EXPECT_THROW(statsB.AddAtomic(statsC), std::invalid_argument);
+   EXPECT_THROW(statsC.AddAtomic(statsB), std::invalid_argument);
+}
+
+TEST(RHistStats, AddExceptionSafety)
+{
+   RHistStats statsA(2);
+   RHistStats statsB(2);
+   statsB.DisableDimension(1);
+
+   statsA.Fill(1, 2);
+   ASSERT_EQ(statsA.GetNEntries(), 1);
+   statsB.Fill(1, 2);
+
+   EXPECT_THROW(statsA.Add(statsB), std::invalid_argument);
+   EXPECT_THROW(statsA.AddAtomic(statsB), std::invalid_argument);
+
+   // Verify exception safety. Only the original entry should be there.
+   EXPECT_EQ(statsA.GetNEntries(), 1);
+   EXPECT_EQ(statsA.GetSumW(), 1);
+   EXPECT_EQ(statsA.GetSumW2(), 1);
+   EXPECT_EQ(statsA.GetDimensionStats(0).fSumWX, 1);
+   EXPECT_EQ(statsA.GetDimensionStats(1).fSumWX, 2);
 }
 
 TEST(RHistStats, Clear)
@@ -151,7 +303,7 @@ TEST(RHistStats, ComputeNEffectiveEntries)
 {
    RHistStats stats(1);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeNEffectiveEntries(), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeNEffectiveEntries()));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -168,7 +320,7 @@ TEST(RHistStats, ComputeNEffectiveEntriesWeighted)
 {
    RHistStats stats(1);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeNEffectiveEntries(), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeNEffectiveEntries()));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -186,9 +338,9 @@ TEST(RHistStats, ComputeMean)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeMean(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeMean(1), 0);
-   EXPECT_EQ(stats.ComputeMean(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -205,9 +357,9 @@ TEST(RHistStats, ComputeMeanWeighted)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeMean(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeMean(1), 0);
-   EXPECT_EQ(stats.ComputeMean(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeMean(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -225,9 +377,9 @@ TEST(RHistStats, ComputeVariance)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeVariance(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeVariance(1), 0);
-   EXPECT_EQ(stats.ComputeVariance(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -244,9 +396,9 @@ TEST(RHistStats, ComputeVarianceWeighted)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeVariance(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeVariance(1), 0);
-   EXPECT_EQ(stats.ComputeVariance(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -264,9 +416,9 @@ TEST(RHistStats, ComputeStdDev)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeStdDev(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeStdDev(1), 0);
-   EXPECT_EQ(stats.ComputeStdDev(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -283,9 +435,9 @@ TEST(RHistStats, ComputeStdDevWeighted)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeStdDev(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeStdDev(1), 0);
-   EXPECT_EQ(stats.ComputeStdDev(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 0; i < Entries; i++) {
@@ -303,16 +455,16 @@ TEST(RHistStats, ComputeSkewness)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeSkewness(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeSkewness(1), 0);
-   EXPECT_EQ(stats.ComputeSkewness(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(2)));
 
    stats.Fill(0, 0, 0);
    ASSERT_EQ(stats.GetNEntries(), 1);
-   // With one entry, the variance is 0 and we define skewness to be 0 as well.
-   EXPECT_EQ(stats.ComputeSkewness(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeSkewness(1), 0);
-   EXPECT_EQ(stats.ComputeSkewness(2), 0);
+   // With one entry, the variance is 0 and we define skewness to be NaN.
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 1; i < Entries; i++) {
@@ -330,16 +482,16 @@ TEST(RHistStats, ComputeSkewnessWeighted)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeSkewness(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeSkewness(1), 0);
-   EXPECT_EQ(stats.ComputeSkewness(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(2)));
 
    stats.Fill(0, 0, 0, RWeight(0.1));
    ASSERT_EQ(stats.GetNEntries(), 1);
-   // With one entry, the variance is 0 and we define skewness to be 0 as well.
-   EXPECT_EQ(stats.ComputeSkewness(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeSkewness(1), 0);
-   EXPECT_EQ(stats.ComputeSkewness(2), 0);
+   // With one entry, the variance is 0 and we define skewness to be NaN.
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 1; i < Entries; i++) {
@@ -357,16 +509,16 @@ TEST(RHistStats, ComputeKurtosis)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(1), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(2)));
 
    stats.Fill(0, 0, 0);
    ASSERT_EQ(stats.GetNEntries(), 1);
-   // With one entry, the variance is 0 and we define kurtosis to be 0 as well.
-   EXPECT_EQ(stats.ComputeKurtosis(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(1), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(2), 0);
+   // With one entry, the variance is 0 and we define kurtosis to be NaN.
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 1; i < Entries; i++) {
@@ -384,16 +536,16 @@ TEST(RHistStats, ComputeKurtosisWeighted)
 {
    RHistStats stats(3);
    ASSERT_EQ(stats.GetNEntries(), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(1), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(2), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(2)));
 
    stats.Fill(0, 0, 0, RWeight(0.1));
    ASSERT_EQ(stats.GetNEntries(), 1);
-   // With one entry, the variance is 0 and we define kurtosis to be 0 as well.
-   EXPECT_EQ(stats.ComputeKurtosis(/*=0*/), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(1), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(2), 0);
+   // With one entry, the variance is 0 and we define kurtosis to be NaN.
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(/*=0*/)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(1)));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis(2)));
 
    static constexpr std::size_t Entries = 20;
    for (std::size_t i = 1; i < Entries; i++) {
@@ -413,8 +565,8 @@ TEST(RHistStats, ComputeSkewnessKurtosisVar0)
    stats.Fill(1, RWeight(0.1));
    ASSERT_EQ(stats.GetNEntries(), 1);
    EXPECT_EQ(stats.ComputeVariance(), 0);
-   EXPECT_EQ(stats.ComputeSkewness(), 0);
-   EXPECT_EQ(stats.ComputeKurtosis(), 0);
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness()));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis()));
 }
 
 TEST(RHistStats, FillInvalidNumberOfArguments)
@@ -430,6 +582,14 @@ TEST(RHistStats, FillInvalidNumberOfArguments)
    EXPECT_THROW(stats2.Fill(1, 2, 3), std::invalid_argument);
 }
 
+TEST(RHistStats, FillInvalidArgumentType)
+{
+   RHistStats stats(1);
+
+   EXPECT_NO_THROW(stats.Fill(1));
+   EXPECT_THROW(stats.Fill("a"), std::invalid_argument);
+}
+
 TEST(RHistStats, FillWeightInvalidNumberOfArguments)
 {
    RHistStats stats1(1);
@@ -443,6 +603,14 @@ TEST(RHistStats, FillWeightInvalidNumberOfArguments)
    EXPECT_THROW(stats2.Fill(1, 2, 3, RWeight(1)), std::invalid_argument);
 }
 
+TEST(RHistStats, FillWeightInvalidArgumentType)
+{
+   RHistStats stats(1);
+
+   EXPECT_NO_THROW(stats.Fill(1, RWeight(1)));
+   EXPECT_THROW(stats.Fill("a", RWeight(1)), std::invalid_argument);
+}
+
 TEST(RHistStats, FillTupleWeightInvalidNumberOfArguments)
 {
    RHistStats stats1(1);
@@ -454,4 +622,104 @@ TEST(RHistStats, FillTupleWeightInvalidNumberOfArguments)
    EXPECT_THROW(stats2.Fill(std::make_tuple(1), RWeight(1)), std::invalid_argument);
    EXPECT_NO_THROW(stats2.Fill(std::make_tuple(1, 2), RWeight(1)));
    EXPECT_THROW(stats2.Fill(std::make_tuple(1, 2, 3), RWeight(1)), std::invalid_argument);
+}
+
+TEST(RHistStats, FillWeightNegative)
+{
+   RHistStats stats(1);
+   stats.Fill(1, RWeight(1));
+   stats.Fill(1, RWeight(-1));
+
+   EXPECT_EQ(stats.GetNEntries(), 2);
+   EXPECT_EQ(stats.GetSumW(), 0);
+   EXPECT_EQ(stats.GetSumW2(), 2);
+   // The two weighted entries cancel out each other.
+   EXPECT_EQ(stats.ComputeNEffectiveEntries(), 0);
+
+   // Cannot compute the mean, and all other computations depend on it.
+   EXPECT_TRUE(std::isnan(stats.ComputeMean()));
+   EXPECT_TRUE(std::isnan(stats.ComputeVariance()));
+   EXPECT_TRUE(std::isnan(stats.ComputeStdDev()));
+   EXPECT_TRUE(std::isnan(stats.ComputeSkewness()));
+   EXPECT_TRUE(std::isnan(stats.ComputeKurtosis()));
+}
+
+TEST(RHistStats, FillExceptionSafety)
+{
+   RHistStats stats(2);
+
+   stats.Fill(1, 2);
+   ASSERT_EQ(stats.GetNEntries(), 1);
+
+   EXPECT_THROW(stats.Fill(1, "b"), std::invalid_argument);
+   EXPECT_THROW(stats.Fill(std::make_tuple(1, "b")), std::invalid_argument);
+   EXPECT_THROW(stats.Fill(1, "b", RWeight(1)), std::invalid_argument);
+   EXPECT_THROW(stats.Fill(std::make_tuple(1, "b"), RWeight(1)), std::invalid_argument);
+
+   // Verify exception safety. Only the first entry should be there.
+   EXPECT_EQ(stats.GetNEntries(), 1);
+   EXPECT_EQ(stats.GetSumW(), 1);
+   EXPECT_EQ(stats.GetSumW2(), 1);
+   EXPECT_EQ(stats.GetDimensionStats(0).fSumWX, 1);
+   EXPECT_EQ(stats.GetDimensionStats(1).fSumWX, 2);
+}
+
+TEST(RHistEngine, FillForward)
+{
+   RHistStats stats(1);
+
+   std::tuple<CopyArgument> args(1.5);
+   stats.Fill(args);
+   EXPECT_EQ(stats.GetNEntries(), 1);
+   EXPECT_EQ(stats.GetDimensionStats(0).fSumWX, 1.5);
+
+   ASSERT_FALSE(CopyArgument::HasBeenCopied());
+
+   CopyArgument arg(2.5);
+   stats.Fill(arg);
+   EXPECT_EQ(stats.GetNEntries(), 2);
+   EXPECT_EQ(stats.GetDimensionStats(0).fSumWX, 4);
+
+   ASSERT_FALSE(CopyArgument::HasBeenCopied());
+}
+
+TEST(RHistStats, Scale)
+{
+   RHistStats stats(3);
+   ASSERT_EQ(stats.GetNEntries(), 0);
+
+   static constexpr std::size_t Entries = 20;
+   for (std::size_t i = 0; i < Entries; i++) {
+      stats.Fill(i, 2 * i, i * i, RWeight(0.1 + 0.03 * i));
+   }
+
+   static constexpr double Factor = 0.8;
+   stats.Scale(Factor);
+
+   // The number of entries should not have changed.
+   EXPECT_EQ(stats.GetNEntries(), Entries);
+   EXPECT_DOUBLE_EQ(stats.GetSumW(), Factor * 7.7);
+   EXPECT_DOUBLE_EQ(stats.GetSumW2(), Factor * Factor * 3.563);
+
+   {
+      const auto &dimensionStats = stats.GetDimensionStats(/*=0*/);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX, Factor * 93.1);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX2, Factor * 1330.0);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX3, Factor * 20489.98);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX4, Factor * 330265.6);
+   }
+   {
+      const auto &dimensionStats = stats.GetDimensionStats(1);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX, Factor * 2 * 93.1);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX2, Factor * 4 * 1330.0);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX3, Factor * 8 * 20489.98);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX4, Factor * 16 * 330265.6);
+   }
+   {
+      const auto &dimensionStats = stats.GetDimensionStats(2);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX, Factor * 1330.0);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX2, Factor * 330265.6);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX3, Factor * 93164182.0);
+      EXPECT_DOUBLE_EQ(dimensionStats.fSumWX4, Factor * 28108731464.8);
+   }
 }

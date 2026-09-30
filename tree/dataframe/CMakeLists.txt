@@ -26,12 +26,17 @@ if (imt)
   list(APPEND RDATAFRAME_EXTRA_DEPS Imt)
 endif(imt)
 
+if (root7)
+  list(APPEND RDATAFRAME_EXTRA_DEPS ROOTHist)
+endif()
+
 set (EXTRA_DICT_OPTS)
 if (runtime_cxxmodules AND WIN32)
   set (EXTRA_DICT_OPTS NO_CXXMODULE)
 endif()
 
 ROOT_STANDARD_LIBRARY_PACKAGE(ROOTDataFrame
+  NO_GLOB_HEADERS # Don't install RArrowDS and similar if they are off
   HEADERS
     ROOT/RCsvDS.hxx
     ROOT/RVecDS.hxx
@@ -168,6 +173,8 @@ endif()
 if(MSVC)
   target_compile_definitions(ROOTDataFrame PRIVATE _USE_MATH_DEFINES)
 endif()
+
+target_include_directories(ROOTDataFrame PRIVATE ../../builtins/exprtk) # hard-coded builtin for lexing
 
 target_link_libraries(ROOTDataFrame PRIVATE nlohmann_json::nlohmann_json)
 

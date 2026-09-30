@@ -1,11 +1,11 @@
 //
-// Cint macro to test I/O of SMatrix classes and compare with a TMatrix
-// A ROOT tree is written and read in both using either a SMatrix  or
-/// a TMatrixD.
+// Cling macro to test I/O of SMatrix classes and compare with a TMatrix
+// A ROOT tree is written and read in both using either a SMatrix or
+// a TMatrixD.
 //
 //  To execute the macro type in:
 //
-// root[0]: .x  smatrixIO.C
+// root[0]: .x testIO.cxx
 
 #include "Math/SMatrix.h"
 #include "TMatrixD.h"
@@ -470,7 +470,7 @@ double readSMatrix(const std::string & file) {
 
   TFile f1(file.c_str());
   if (f1.IsZombie() ) {
-    std::cerr << "Error opening the ROOT file" << file << std::endl;
+    std::cerr << "Error opening the ROOT file " << file << std::endl;
     return -1;
   }
 
@@ -516,7 +516,7 @@ double readSMatrixSym(const std::string & file) {
 
   TFile f1(file.c_str());
   if (f1.IsZombie() ) {
-    std::cerr << "Error opening the ROOT file" << file << std::endl;
+    std::cerr << "Error opening the ROOT file " << file << std::endl;
     return -1;
   }
 
@@ -762,15 +762,14 @@ int testRead(double & r1, double & r2, double & r3) {
     iret = 2;
   }
 
-  std::cout << "try to read file written with Reflex using CINT Dictionaries " << std::endl;
+  std::cout << "try to read file written with Reflex using Cling Dictionaries " << std::endl;
 
   r3 = readSMatrix(sfile2);
   if ( r3 != -1. && fabs(r2-r3) > tol) {
-    std::cout << "\nERROR: Differeces Reflex-CINT found  when reading SMatrices" << std::endl;
+    std::cout << "\nERROR: Differeces Reflex-Cling found  when reading SMatrices" << std::endl;
     int pr = std::cout.precision(18);  std::cout << r2 << "   !=    " << r3 << std::endl; std::cout.precision(pr);
     iret = 3;
   }
-
 
   return iret;
 }
@@ -814,18 +813,18 @@ int testReadSym(double & r1, double & r2, double & r3) {
     iret = 12;
   }
 
-  std::cout << "try to read file written with Reflex using CINT Dictionaries " << std::endl;
+  std::cout << "try to read file written with Reflex using Cling Dictionaries " << std::endl;
 
   r3 = readSMatrixSym(symfile2);
   if ( r3 != -1. && fabs(r2-r3) > tol) {
-    std::cout << "\nERROR: Differeces Reflex-CINT found  when reading SMatricesSym" << std::endl;
+    std::cout << "\nERROR: Differeces Reflex-Cling found  when reading SMatricesSym" << std::endl;
     int pr = std::cout.precision(18);  std::cout << r2 << "   !=    " << r3 << std::endl; std::cout.precision(pr);
     iret = 13;
   }
 
-
   return iret;
 }
+
 int testResult(double w1, double r1, double w2, double r2, double r3) {
 
   int iret = 0;
@@ -896,7 +895,7 @@ int testIO() {
 
 
 
-  double r1, r2, r3  = 0;
+  double r1, r2, r3 = 0;
   int iret2 = 0;
   iret2 |= testRead(r1,r2,r3);
   iret2 |= testResult(w1,r1,w2,r2,r3);
@@ -935,7 +934,7 @@ int testIO() {
   std::cout << "\n*****************************************************\n\n";
 
   // load track dictionary
-  iret |= gSystem->Load("libTrackDict");
+  // iret |= gSystem->Load("libTrackDict");
   if (iret != 0 ) return iret;
 
   iret |= testTrack(nEvents);

@@ -13,12 +13,11 @@
 #include "TH2Poly.h"
 #include "TMultiGraph.h"
 #include "TGraph.h"
-#include "TInterpreter.h"
-#include "Riostream.h"
 #include "TList.h"
 #include "TMath.h"
-#include <cassert>
 
+#include <cassert>
+#include <ostream>
 
 /** \class TH2Poly
     \ingroup Histograms
@@ -146,7 +145,7 @@ times, it is better to divide into a small number of cells.
 
 TH2Poly::TH2Poly()
 {
-   Initialize(0., 0., 0., 0., 25, 25);
+   Initialize(0., 0., 0., 0., 25, 25); // automatic axis range calculation
    SetName("NoName");
    SetTitle("NoTitle");
    SetFloat();

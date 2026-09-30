@@ -20,9 +20,9 @@
 
 #include "RConfigure.h"
 #include <ROOT/RConfig.hxx>
-#include "snprintf.h"
-#include <iostream>
 
+#include <cstdio>
+#include <iostream>
 #ifdef WIN32
    #include <io.h>
    typedef long off_t;
@@ -62,6 +62,7 @@
 #include "TSystem.h"
 #include "TRemoteObject.h"
 #include "TUrl.h"
+#define ROOT_compiledata_cxx
 #include "compiledata.h"
 #include "TClass.h"
 
@@ -737,7 +738,7 @@ Int_t TApplicationServer::ReceiveFile(const char *file, Bool_t bin, Long64_t siz
    }
 
    const Int_t kMAXBUF = 16384;  //32768  //16384  //65536;
-   char buf[kMAXBUF], cpy[kMAXBUF];
+   char buf[kMAXBUF];
 
    Int_t    left, r;
    Long64_t filesize = 0;
@@ -755,18 +756,13 @@ Int_t TApplicationServer::ReceiveFile(const char *file, Bool_t bin, Long64_t siz
             Int_t w;
 
             if (!bin) {
-               Int_t k = 0, i = 0, j = 0;
-               char *q;
-               while (i < r) {
-                  if (p[i] == '\r') {
-                     i++;
-                     k++;
+               Int_t j = 0;
+               for (Int_t i = 0; i < r; ++i) {
+                  if (p[i] != '\r') {
+                     p[j++] = p[i];
                   }
-                  cpy[j++] = buf[i++];
                }
-               q = cpy;
-               r -= k;
-               w = write(fd, q, r);
+               w = write(fd, p, j);
             } else {
                w = write(fd, p, r);
             }
@@ -788,7 +784,7 @@ Int_t TApplicationServer::ReceiveFile(const char *file, Bool_t bin, Long64_t siz
 
    close(fd);
 
-   chmod(file, 0644);
+   chmod(file, 0666);
 
    return 0;
 }
@@ -1280,16 +1276,16 @@ void TApplicationServer::ExecLogon()
    TString name = ".rootlogon.C";
    TString sname = "system";
    sname += name;
-   char *s = gSystem->ConcatFileName(TROOT::GetEtcDir(), sname);
+   TString temp_sname = sname;
+   TString temp_name = name;
+   const char *s = gSystem->PrependPathName(TROOT::GetEtcDir(), temp_sname);
    if (!gSystem->AccessPathName(s, kReadPermission)) {
       ProcessFile(s);
    }
-   delete [] s;
-   s = gSystem->ConcatFileName(gSystem->HomeDirectory(), name);
+   s = gSystem->PrependPathName(gSystem->HomeDirectory(), temp_name);
    if (!gSystem->AccessPathName(s, kReadPermission)) {
       ProcessFile(s);
    }
-   delete [] s;
    // avoid executing ~/.rootlogon.C twice
    if (strcmp(gSystem->HomeDirectory(), gSystem->WorkingDirectory())) {
       if (!gSystem->AccessPathName(name, kReadPermission))

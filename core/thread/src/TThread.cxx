@@ -35,11 +35,13 @@ TPosixThread or TWin32Thread).
 #include "TInterpreter.h"
 #include "TError.h"
 #include "TSystem.h"
-#include "Varargs.h"
 #include "ThreadLocalStorage.h"
 #include "TThreadSlots.h"
 #include "TRWMutexImp.h"
-#include "snprintf.h"
+
+#include <cstdio>
+
+#include <cstdarg>
 
 TThreadImp     *TThread::fgThreadImp = nullptr;
 Long_t          TThread::fgMainId = 0;
@@ -346,7 +348,7 @@ void TThread::Init()
      if (!ROOT::gCoreMutex) {
         // To avoid dead locks, caused by shared library opening and/or static initialization
         // taking the same lock as 'tls_get_addr_tail', we can not use UniqueLockRecurseCount.
-#ifdef R__HAS_TBB
+#ifdef ROOT_CORE_THREAD_TBB
         ROOT::gCoreMutex = new ROOT::TRWMutexImp<std::mutex, ROOT::Internal::RecurseCountsTBBUnique>();
 #else
         ROOT::gCoreMutex = new ROOT::TRWMutexImp<std::mutex, ROOT::Internal::RecurseCounts>();
@@ -916,10 +918,10 @@ void **TThread::GetTls(Int_t k) {
 ////////////////////////////////////////////////////////////////////////////////
 /// Static method providing a thread safe printf. Appends a newline.
 
-void TThread::Printf(const char *va_(fmt), ...)
+void TThread::Printf(const char *fmt, ...)
 {
    va_list ap;
-   va_start(ap,va_(fmt));
+   va_start(ap, fmt);
 
    Int_t buf_size = 2048;
    char *buf;
@@ -927,7 +929,7 @@ void TThread::Printf(const char *va_(fmt), ...)
 again:
    buf = new char[buf_size];
 
-   int n = vsnprintf(buf, buf_size, va_(fmt), ap);
+   int n = vsnprintf(buf, buf_size, fmt, ap);
    // old vsnprintf's return -1 if string is truncated new ones return
    // total number of characters that would have been written
    if (n == -1 || n >= buf_size) {

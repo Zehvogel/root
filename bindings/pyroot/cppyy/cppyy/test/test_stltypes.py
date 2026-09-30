@@ -1,10 +1,9 @@
 # -*- coding: UTF-8 -*-
-import py, sys, pytest, os
+import sys, pytest, os
 from pytest import mark, raises, skip
-from support import setup_make, pylong, pyunicode, maxvalue, ispypy, no_root_errors
+from support import setup_make, pylong, pyunicode, maxvalue, ispypy, IS_WINDOWS, has_cpp_20
 
-currpath = os.getcwd()
-test_dct = currpath + "/libstltypesDict"
+test_dct = "stltypes_cxx"
 
 global_n = 5
 
@@ -493,7 +492,7 @@ class TestSTLVECTOR:
         ll4[1] = 'a'
         raises(TypeError, a.vector_pair, ll4)
 
-    @mark.skip()
+    @mark.xfail(run=False, reason="Fatal Python error: Segmentation fault")
     def test12_vector_lifeline(self):
         """Check lifeline setting on vectors of objects"""
 
@@ -616,7 +615,7 @@ class TestSTLVECTOR:
         v = cppyy.gbl.std.vector(l)
         assert list(l) == l
 
-    @mark.xfail
+    @mark.xfail(strict=True)
     def test18_array_interface(self):
         """Test usage of __array__ from numpy"""
 
@@ -820,7 +819,7 @@ class TestSTLVECTOR:
             for i, d in zip(range(-5, 5, 1), data):
                 assert d == i
 
-    def test24_vector_to_span(self):
+    def test24_vector_to_span(self, capfd):
         """Vectors should convert to std::span without errors"""
 
         import cppyy
@@ -839,10 +838,14 @@ class TestSTLVECTOR:
         l = list(range(4))
         v = cppyy.gbl.std.vector["double"](l)
 
-        with no_root_errors():
-            result = cppyy.gbl.calc_cumsum(len(v), v)
+        result = cppyy.gbl.calc_cumsum(len(v), v)
 
         assert result == sum(l)
+
+        # Fail if there were interpreter errors:
+        captured = capfd.readouterr()
+        output = (captured.out + captured.err).lower()
+        assert "error:" not in output
 
 
 class TestSTLSTRING:
@@ -884,7 +887,6 @@ class TestSTLSTRING:
 
             raises(TypeError, c.get_string2, "temp string")
 
-    @mark.xfail()
     def test02_string_data_access(self):
         """Test access to std::string object data members"""
 
@@ -933,8 +935,6 @@ class TestSTLSTRING:
 
         assert tuple(cppyy.gbl.str_array_1) == ('a', 'b', 'c')
         str_array_2 = cppyy.gbl.str_array_2
-        # fix up the size
-        str_array_2.size = 4
         assert tuple(str_array_2) == ('d', 'e', 'f', 'g')
         assert tuple(str_array_2) == ('d', 'e', 'f', 'g')
 
@@ -1017,7 +1017,7 @@ class TestSTLSTRING:
         assert d[x] == 0
         assert d['x'] == 0
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test08_string_operators(self):
         """Mixing of C++ and Python types in global operators"""
 
@@ -1045,6 +1045,7 @@ class TestSTLSTRING:
         assert s1+s2 == "Hello, World!"
         assert s2+s1 == ", World!Hello"
 
+    @mark.xfail(strict=True, condition=IS_WINDOWS == 64, reason="AttributeError: <class cppyy.gbl.std.string at 0x0000021275350610> has no attribute 'size_type'")
     def test09_string_as_str_bytes(self):
         """Python-style methods of str/bytes on std::string"""
 
@@ -1107,7 +1108,7 @@ class TestSTLSTRING:
         assert s.rfind('c')  < 0
         assert s.rfind('c') == s.npos
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test10_string_in_repr_and_str_bytes(self):
         """Special cases for __str__/__repr__"""
 
@@ -1483,16 +1484,12 @@ class TestSTLITERATOR:
 
         assert i == len(a)-1
 
-        for cls in [cppyy.gbl.stl_like_class2, cppyy.gbl.stl_like_class3]:
-            b = cls[float, 2]()
-            b[0] = 27; b[1] = 42
-            limit = len(b)+1
-            for x in b:
-                limit -= 1
-                assert limit and "iterated too far!"
-                assert x in [27, 42]
-            assert x == 42
-            del x, b
+        b = cppyy.gbl.stl_like_class2[float, 2]()
+        b[0] = 27
+        b[1] = 42
+        assert len(b) == 2
+        for i in range(len(b)):
+            assert b[i] in [27, 42]
 
         for num in [4, 5, 6, 7]:
             cls = getattr(cppyy.gbl, 'stl_like_class%d' % num)
@@ -1747,6 +1744,20 @@ class TestSTLSTRING_VIEW:
         gc.collect()    # id.
 
         assert "Lorem ipsum dolor sit amet" in str(text)
+    
+    def  test03_string_view_pythonize(self):
+        """Pythonization of std::string_view"""
+
+        import cppyy
+
+        cppyy.cppdef("""
+        std::string_view s = "Hello, World!";
+        """)
+
+        from cppyy.gbl import s
+
+        assert(s == "Hello, World!")
+        assert(str(s) == "Hello, World!")
 
 
 class TestSTLDEQUE:
@@ -1926,7 +1937,7 @@ class TestSTLTUPLE:
         t = std.make_tuple("aap", 42, 5.)
         assert std.tuple_size(type(t)).value == 3
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test03_tuple_iter(self):
         """Pack/unpack tuples"""
 
@@ -1941,7 +1952,7 @@ class TestSTLTUPLE:
         assert b == '2'
         assert c == 5.
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test04_tuple_lifeline(self):
         """Tuple memory management"""
 
@@ -1966,6 +1977,58 @@ class TestSTLTUPLE:
 
         assert s1.fInt == 42
         assert s2.fInt == 42
+
+    @mark.xfail(run=False, condition=IS_WINDOWS, reason="The wrong values are read back from the tuple!")
+    def test05_tuple_assignment_operator(self):
+        """Check that using std::tuple<>::operator= works.
+        This used to fail because ROOT uses a different type to represent
+        std::tuple internally.
+        """
+        import cppyy
+
+        l1 = [1, 2, 3.0, 4.0]
+
+        long = cppyy.gbl.long
+        double = cppyy.gbl.double
+
+        # We need some container in which we can re-assign the tuple elements
+        container = cppyy.gbl.std.vector("std::tuple<long, long, double, double>")(2)
+
+        value = cppyy.gbl.std.make_tuple[long, long, double, double](*l1)
+
+        # This checks if the tuple assignment operator works from Python
+        container[0] = value
+
+        # Get back elements as a Python list
+        l2 = [cppyy.gbl.std.get[i](container[0]) for i in range(len(l1))]
+
+        assert l2 == l1
+
+
+class TestSTLOPTIONAL:
+    def test01_optional_attribute_forwarding(self):
+        """An empty optional must not forward rich display attribute probes."""
+        import cppyy
+
+        cppyy.cppdef(
+            r"""
+            #include <optional>
+
+            namespace optional_attribute_forwarding {
+            struct Value {
+                int answer = 42;
+            };
+
+            std::optional<Value> empty_optional() { return std::nullopt; }
+            std::optional<Value> full_optional() { return Value{}; }
+            }
+            """
+        )
+        empty = cppyy.gbl.optional_attribute_forwarding.empty_optional()
+        full = cppyy.gbl.optional_attribute_forwarding.full_optional()
+
+        assert full.answer == 42
+        assert not hasattr(empty, "_repr_html_")
 
 
 class TestSTLPAIR:
@@ -2114,6 +2177,7 @@ class TestSTLEXCEPTION:
         gc.collect()
         assert cppyy.gbl.GetMyErrorCount() == 0
 
+    @mark.xfail(run=False, condition=IS_WINDOWS == 64, reason="Crashes on Windows 64 bit")
     def test04_from_cpp(self):
         """Catch C++ exceptiosn from C++"""
 
@@ -2147,5 +2211,96 @@ class TestSTLEXCEPTION:
         assert cppyy.gbl.GetMyErrorCount() == 0
 
 
+@mark.skipif(not has_cpp_20(), reason="std::span requires C++20")
+class TestSTLSPAN:
+    import cppyy
+
+    def test01_span_iterators(self):
+        """
+        Test that std::span::begin() and std::span::end() can be used.
+
+        Covers https://github.com/root-project/root/issues/18837
+        """
+        import cppyy
+
+        l1 = [1, 2, 3]
+        v = cppyy.gbl.vector(int)(l1)
+        s = cppyy.gbl.span(int)(v)
+        s.begin()
+        s.end()
+        # Check that the iteration also works, which uses begin() and end()
+        # internally.
+        assert [b for b in s] == l1
+
+    def test02_span_argument_conversions(self):
+        """
+        Test conversion of various Python objects to std::span arguments.
+
+        Covers:
+        1) Python proxy spans
+        2) NumPy arrays
+        3) array.array
+        4) Type mismatch errors
+        5) std::vector implicit conversion
+        6) const std::span behavior
+        """
+        import cppyy
+        import numpy as np
+        import array
+        import pytest
+
+        cppyy.cppdef("""
+        #include <span>
+        #include <vector>
+
+        template<class T>
+        size_t sum_span(std::span<T> s) {
+            size_t total = 0;
+            for (size_t i = 0; i < s.size(); ++i)
+                total += (size_t)s[i];
+            return total;
+        }
+
+        template<class T>
+        size_t sum_span_const(std::span<const T> s) {
+            size_t total = 0;
+            for (size_t i = 0; i < s.size(); ++i)
+                total += (size_t)s[i];
+            return total;
+        }
+        """)
+
+        data = [1., 2., 3.]
+        expected = sum(data)
+
+        # 1) Python proxy span
+        v = cppyy.gbl.std.vector["double"](data)
+        s = cppyy.gbl.std.span["double"](v)
+        assert cppyy.gbl.sum_span["double"](s) == expected
+        assert cppyy.gbl.sum_span_const["double"](s) == expected
+
+        # 2) NumPy array
+        np_arr = np.array(data, dtype=np.float64)
+        assert cppyy.gbl.sum_span["double"](np_arr) == expected
+        assert cppyy.gbl.sum_span_const["double"](np_arr) == expected
+
+        # 3) array.array
+        arr = array.array('d', data)
+        assert cppyy.gbl.sum_span["double"](arr) == expected
+        assert cppyy.gbl.sum_span_const["double"](arr) == expected
+
+        # 4) Type mismatch → should raise TypeError
+        np_double = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+        with pytest.raises(TypeError):
+            cppyy.gbl.sum_span["double"](np_double)
+
+        # 5) std::vector implicit conversion
+        v2 = cppyy.gbl.std.vector["double"](data)
+        assert cppyy.gbl.sum_span["double"](v2) == expected
+        assert cppyy.gbl.sum_span_const["double"](v2) == expected
+
+        # 6) const span behaves the same (already checked above, but explicit case)
+        assert cppyy.gbl.sum_span_const["double"](np_arr) == expected
+
 if __name__ == "__main__":
-    exit(pytest.main(args=['-sv', '-ra', __file__]))
+    exit(pytest.main(args=['-v', '-ra', __file__]))

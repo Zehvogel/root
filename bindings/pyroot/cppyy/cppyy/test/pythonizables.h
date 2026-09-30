@@ -123,47 +123,43 @@ public:
 
 class IndexableDerived : public IndexableBase {};
 
-
 //===========================================================================
-class WithCallback1 {
+// for testing size() -> __len__ pythonization guards
+class SizeReturnsInt {
 public:
-    WithCallback1(int i);
-
-public:
-    int get_int();
-    void set_int(int i);
+   int size() { return 3; }
+   int *begin() { return m_data; }
+   int *end() { return m_data + 3; }
 
 private:
-    int m_int;
-
-public:
-    static void __cppyy_explicit_pythonize__(PyObject* klass, const std::string&);
-    static std::string klass_name;
+   int m_data[3] = {1, 2, 3};
 };
 
-class WithCallback2 {
+class SizeReturnsNonInt {
 public:
-    WithCallback2(int i);
-
-public:
-    int get_int();
-    void set_int(int i);
-
-protected:
-    int m_int;
-
-public:
-    static void __cppyy_pythonize__(PyObject* klass, const std::string&);
-    static std::string klass_name;
+   struct OptSize {};
+   OptSize size() { return {}; }
+   int *begin() { return nullptr; }
+   int *end() { return nullptr; }
 };
 
-class WithCallback3 : public WithCallback2 {
+class SizeWithoutIterator {
 public:
-    using WithCallback2::WithCallback2;
-
-public:
-    int get_int();
-    void set_int(int i);
+   int size() { return 5; }
+   // no begin()/end() or operator[]
 };
+
+// for testing __len__ with fully inherited container interface
+class ContainerBase {
+public:
+   int size() { return 2; }
+   int *begin() { return m_data; }
+   int *end() { return m_data + 2; }
+
+private:
+   int m_data[2] = {10, 20};
+};
+
+class InheritedContainer : public ContainerBase {};
 
 } // namespace pyzables

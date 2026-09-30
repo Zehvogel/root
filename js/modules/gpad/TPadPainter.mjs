@@ -1,11 +1,11 @@
-import { gStyle, settings, constants, browser, internals, BIT,
+import { gStyle, settings, constants, browser, source_dir, version_id, version, internals, BIT,
          create, toJSON, isBatchMode, loadModules, loadScript, injectCode, isPromise, getPromise, postponePromise,
          isObject, isFunc, isStr, clTObjArray, clTColor, clTPad, clTFrame, clTStyle, clTLegend,
          clTHStack, clTMultiGraph, clTLegendEntry, nsSVG, kTitle, clTList, urlClassPrefix } from '../core.mjs';
 import { select as d3_select, rgb as d3_rgb } from '../d3.mjs';
 import { ColorPalette, adoptRootColors, getColorPalette, getGrayColors, extendRootColors,
          getRGBfromTColor, decodeWebCanvasColors } from '../base/colors.mjs';
-import { prSVG, prJSON, getElementRect, getAbsPosInCanvas, DrawOptions, compressSVG, makeTranslate,
+import { prSVG, prJSON, prHTML, getElementRect, getAbsPosInCanvas, DrawOptions, compressSVG, makeTranslate,
          getTDatime, convertDate, svgToImage, getBoxDecorations } from '../base/BasePainter.mjs';
 import { ObjectPainter, selectActivePad, getActivePad, isPadPainter } from '../base/ObjectPainter.mjs';
 import { TAttLineHandler } from '../base/TAttLineHandler.mjs';
@@ -40,7 +40,7 @@ const PadButtonsHandler = {
       let state = btn.property('buttons_state');
 
       if (btn.property('timout_handler')) {
-         if (action !== 'timeout')
+         if ((action !== 'timeout') && (action !== 'timeout2'))
             clearTimeout(btn.property('timout_handler'));
          btn.property('timout_handler', null);
       }
@@ -54,8 +54,14 @@ const PadButtonsHandler = {
          case 'enterbtn':
             this.btns_active_flag = true;
             return; // do nothing, just cleanup timeout
+         case 'hidemain':
          case 'timeout':
+            if (!browser.touches)
+               btn.property('timout_handler', setTimeout(() => this.toggleButtonsVisibility('timeout2'), 5000));
             break;
+         case 'timeout2':
+            btn.style('opacity', 0); // hide JSROOT button, but keep handling
+            return;
          case 'toggle':
             state = !state;
             btn.property('buttons_state', state);
@@ -72,20 +78,25 @@ const PadButtonsHandler = {
       group.selectAll('svg').each(function() {
          if (this !== btn.node())
             d3_select(this).style('display', is_visible ? '' : 'none');
+         else if (is_visible)
+            btn.style('opacity', null); // default opacity
       });
    },
 
 
    alignButtons(btns, width, height) {
-      const sz0 = this.getButtonSize(1.25), nextx = (btns.property('nextx') || 0) + sz0;
+      const isfast = this.isFastDrawing(),
+            isvert = btns.property('vertical'),
+            sz0x = isfast || isvert ? this.getButtonSize(1.25) : this.$first_button_width,
+            nextx = (btns.property('nextx') || 0) + sz0x;
       let btns_x, btns_y;
 
-      if (btns.property('vertical')) {
-         btns_x = btns.property('leftside') ? 2 : (width - sz0);
+      if (isvert) {
+         btns_x = btns.property('leftside') ? 2 : (width - sz0x);
          btns_y = height - nextx;
       } else {
          btns_x = btns.property('leftside') ? 2 : (width - nextx);
-         btns_y = height - sz0;
+         btns_y = height - this.getButtonSize(1.25);
       }
 
       makeTranslate(btns, btns_x, btns_y);
@@ -121,20 +132,39 @@ const PadButtonsHandler = {
       if (!this._buttons)
          return;
 
-      const istop = this.isTopPad(), y = 0;
-      let ctrl, x = group.property('leftside') ? this.getButtonSize(1.25) : 0;
+      const istop = this.isTopPad(),
+            isfast = this.isFastDrawing(),
+            y = 0;
+      this.$first_button_width = this.getButtonSize(isfast || !istop ? 1.25 : 3.5);
+      let ctrl, x = group.property('leftside') ? this.$first_button_width : 0;
 
-      if (this.isFastDrawing()) {
+      if (isfast) {
          ctrl = ToolbarIcons.createSVG(group, ToolbarIcons.circle, this.getButtonSize(), 'enlargePad', false)
                             .attr('name', 'Enlarge').attr('x', 0).attr('y', 0)
                             .on('click', evnt => this.clickPadButton('enlargePad', evnt));
       } else {
-         ctrl = ToolbarIcons.createSVG(group, ToolbarIcons.rect, this.getButtonSize(), 'Toggle tool buttons', false)
+         ctrl = ToolbarIcons.createSVG(group, istop ? ToolbarIcons.logo : ToolbarIcons.rect, this.getButtonSize(), istop ? `JSROOT version: ${version}` : `Toggle buttons on ${this.getPadName()}`, false)
                             .attr('name', 'Toggle').attr('x', 0).attr('y', 0)
                             .property('buttons_state', (settings.ToolBar !== 'popup') || browser.touches)
+                            .property('pointer-events', 'visibleFill')
                             .on('click', evnt => this.toggleButtonsVisibility('toggle', evnt));
+
          ctrl.node()._mouseenter = () => this.toggleButtonsVisibility('enable');
          ctrl.node()._mouseleave = () => this.toggleButtonsVisibility('disable');
+
+         if (istop && settings.ContextMenu) {
+            ctrl.on('contextmenu', evnt => {
+               evnt.preventDefault();
+               evnt.stopPropagation();
+               createMenu(evnt).then(menu => {
+                  menu.addSettingsMenu(false, 'JSROOT', arg => {
+                     if (arg === 'dark')
+                        this.changeDarkMode();
+                  });
+                  menu.show();
+               });
+            });
+         }
 
          for (let k = 0; k < this._buttons.length; ++k) {
             const item = this._buttons[k];
@@ -173,6 +203,9 @@ const PadButtonsHandler = {
          ctrl.attr('y', x);
       else if (!group.property('leftside'))
          ctrl.attr('x', x);
+
+      if (!browser.touches)
+         this.toggleButtonsVisibility('hidemain');
    },
 
    assign(painter) {
@@ -185,10 +218,11 @@ const PadButtonsHandler = {
 /** @summary Fill TWebObjectOptions for painter
   * @private */
 function createWebObjectOptions(painter) {
-   if (!painter?.getSnapId())
+   const snapid = painter?.getSnapId();
+   if (!snapid)
       return null;
 
-   const obj = { _typename: 'TWebObjectOptions', snapid: painter.getSnapId(), opt: painter.getDrawOpt(true), fcust: '', fopt: [] };
+   const obj = { _typename: 'TWebObjectOptions', snapid, opt: painter.getDrawOpt(true), fcust: '', fopt: [] };
    if (isFunc(painter.fillWebObjectOptions))
       painter.fillWebObjectOptions(obj);
    return obj;
@@ -572,13 +606,14 @@ class TPadPainter extends ObjectPainter {
    /** @summary Provides automatic color
     * @desc Uses ROOT colors palette if possible
     * @private */
-   getAutoColor(numprimitives) {
-      numprimitives = Math.max(numprimitives || (this.#num_primitives || 5) - (this.#num_specials || 0), 2);
-
-      let indx = this.#auto_color_cnt ?? 0;
-      this.#auto_color_cnt = (indx + 1) % numprimitives;
-      if (indx >= numprimitives)
-         indx = numprimitives - 1;
+   getAutoColor(numprimitives, indx) {
+      if (!numprimitives || indx === undefined) {
+         numprimitives = Math.max(numprimitives || (this.#num_primitives || 5) - (this.#num_specials || 0), 2);
+         indx = this.#auto_color_cnt ?? 0;
+         this.#auto_color_cnt = (indx + 1) % numprimitives;
+         if (indx >= numprimitives)
+            indx = numprimitives - 1;
+      }
 
       let indexes = this._getCustomPaletteIndexes();
       if (!indexes) {
@@ -1235,7 +1270,10 @@ class TPadPainter extends ObjectPainter {
       if (!lst)
          return;
       for (let i = 0; i < lst.arr?.length; ++i) {
-         if (this.checkSpecial(lst.arr[i])) {
+         if (lst.arr[i] === lst) {
+            lst.arr[i] = null;
+            console.error('list of primitives includes itself - endless recursion');
+         } else if (this.checkSpecial(lst.arr[i])) {
             lst.arr[i].$special = true; // mark object as special one, do not use in drawing
             if (count_specials)
                this.#num_specials++;
@@ -1587,9 +1625,11 @@ class TPadPainter extends ObjectPainter {
       const fmts = ['svg', 'png', 'jpeg', 'webp'];
       if (internals.makePDF)
          fmts.push('pdf');
-      fmts.forEach(fmt => menu.add(`${fname}.${fmt}`, () => this.saveAs(fmt, this.isCanvas(), `${fname}.${fmt}`)));
+      fmts.forEach(fmt => menu.add(`${fname}.${fmt}`, () => this.saveAs(fmt, this.isCanvas(), `${fname}.${fmt}`), `Produce ${fmt} image`));
       if (this.isCanvas()) {
          menu.separator();
+         menu.add(`${fname}.html`, () => this.saveAs('html', true, `${fname}.html`), 'Produce html with canvas display');
+         menu.add(`${fname}0.html`, () => this.saveAs('html', false, `${fname}0.html`), 'Produce compact html with canvas display');
          menu.add(`${fname}.json`, () => this.saveAs('json', true, `${fname}.json`), 'Produce JSON with line spacing');
          menu.add(`${fname}0.json`, () => this.saveAs('json', false, `${fname}0.json`), 'Produce JSON without line spacing');
       }
@@ -2246,9 +2286,9 @@ class TPadPainter extends ObjectPainter {
      * @return {Promise} with image data, coded with btoa() function
      * @private */
    async createImage(format) {
-      if ((format === 'png') || (format === 'jpeg') || (format === 'svg') || (format === 'webp') || (format === 'pdf')) {
+      if ((format === 'png') || (format === 'jpeg') || (format === 'html') || (format === 'svg') || (format === 'webp') || (format === 'pdf')) {
          return this.produceImage(true, format).then(res => {
-            if (!res || (format === 'svg'))
+            if (!res || (format === 'svg') || (format === 'html'))
                return res;
             const separ = res.indexOf('base64,');
             return (separ > 0) ? res.slice(separ + 7) : '';
@@ -2466,7 +2506,12 @@ class TPadPainter extends ObjectPainter {
             if (res)
                this.getCanvPainter()?.sendWebsocket(`SAVE:${filename}:${res}`);
          } else {
-            const prefix = (kind === 'svg') ? prSVG : (kind === 'json' ? prJSON : '');
+            let prefix = '';
+            switch (kind) {
+               case 'svg': prefix = prSVG; break;
+               case 'json': prefix = prJSON; break;
+               case 'html': prefix = prHTML; break;
+            }
             saveFile(filename, prefix ? prefix + encodeURIComponent(imgdata) : imgdata);
          }
       });
@@ -2486,8 +2531,52 @@ class TPadPainter extends ObjectPainter {
    /** @summary Produce image for the pad
      * @return {Promise} with created image */
    async produceImage(full_canvas, file_format, args) {
-      if (file_format === 'json')
-         return isFunc(this.produceJSON) ? this.produceJSON(full_canvas ? 2 : 0) : '';
+      if ((file_format === 'json') || (file_format === 'html')) {
+         const json = isFunc(this.produceJSON) ? this.produceJSON(full_canvas ? 2 : 0) : '';
+         if (!json || (file_format === 'json'))
+            return json;
+         let url = source_dir;
+         if (url.indexOf('http://localhost') === 0) {
+            url = 'https://root.cern/js/';
+            url += (version_id === 'dev') || /^\d+\.\d+\.\d+$/.test(version_id) ? version_id : 'latest';
+         }
+         return '<!DOCTYPE html>\n' +
+                '<html lang="en">\n' +
+                '<head>\n' +
+                '  <meta charset="utf-8">\n' +
+                '  <title>Dsiplay ROOT canvas</title>\n' +
+                `  <link rel="shortcut icon" href="${url}/img/RootIcon.ico"/>\n` +
+                '  <script type="importmap">\n' +
+                `    { "imports": { "jsroot": "${url}/modules/main.mjs" } }\n` +
+                '  </' + 'script>\n' + // avoid problems with batch production
+                '  <style>\n' +
+                '    body {\n' +
+                '      margin: 0;\n' +
+                '      padding: 0;\n' +
+                '      display: flex;\n' +
+                '      justify-content: center;\n' +
+                '      align-items: center;\n' +
+                '      min-height: 100vh;\n' +
+                '      background-color: #f0f0f0;\n' +
+                '    }\n' +
+                '    .main-draw-box {\n' +
+                '      width: 80%;\n' +
+                '      min-height: 80vh;\n' +
+                '      background-color: white;\n' +
+                '      box-shadow: 0 4px 10px rgba(0,0,0,0.1);\n' +
+                '    }\n' +
+                '  </style>\n' +
+                '</head>\n' +
+                '<body>\n' +
+                '  <div id="drawing" class="main-draw-box"></div>\n' +
+                '  <script type="module">\n' +
+                '    import { parse, draw } from "jsroot";\n' +
+                `    const obj = parse(${json});\n` +
+                '    draw("drawing", obj);\n' +
+                '  </' + 'script>\n' + // avoid problems with batch production
+                '</body>\n' +
+                '</html>\n';
+      }
 
       const use_frame = (full_canvas === 'frame'),
             elem = use_frame ? this.getFrameSvg() : (full_canvas ? this.getCanvSvg() : this.getPadSvg()),

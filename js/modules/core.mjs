@@ -6,7 +6,7 @@ const version_id = 'dev',
 
 /** @summary version date
   * @desc Release date in format day/month/year like '14/04/2022' */
-version_date = '7/11/2025',
+version_date = '10/09/2026',
 
 /** @summary version id and date
   * @desc Produced by concatenation of {@link version_id} and {@link version_date}
@@ -249,6 +249,8 @@ settings = {
    Render3DBatch: constants.Render3D.Default,
    /** @summary Way to embed 3D drawing in SVG, see {@link constants.Embed3D} for possible values */
    Embed3D: constants.Embed3D.Default,
+   /** @summary Use `resvg-js` backend for converting SVGs in node.js */
+   UseResvgJs: true,
    /** @summary Default canvas width */
    CanvasWidth: 1200,
    /** @summary Default canvas height */
@@ -328,6 +330,10 @@ settings = {
    YValuesFormat: undefined,
    /** @summary custom format for all Z values, when not specified {@link gStyle.fStatFormat} is used */
    ZValuesFormat: undefined,
+   /** @summary custom format for all float values like TH1F content */
+   FloatFormat: '8.6g',
+   /** @summary custom format for all double values like TH1D content */
+   DoubleFormat: '10.8g',
    /** @summary Let detect and solve problem when server returns wrong Content-Length header
      * @desc See [jsroot#189]{@link https://github.com/root-project/jsroot/issues/189} for more info
      * Can be enabled by adding 'wrong_http_response' parameter to URL when using JSROOT UI
@@ -355,6 +361,10 @@ settings = {
      * @desc Allows to retry files reading if original URL fails
      * @private */
    FilesRemap: { 'https://root.cern/': 'https://root-eos.web.cern.ch/' },
+   /** @summary THttpServer read timeout in ms
+     * @desc Configures timeout for requests to THttpServer
+     * @default 0 */
+   ServerTimeout: 0,
    /** @summary Configure xhr.withCredentials = true when submitting http requests from JSROOT */
    WithCredentials: false,
    /** @summary Skip streamer infos from the GUI */
@@ -766,9 +776,9 @@ function parse(json) {
          return; // pair object is not counted in the objects map
       }
 
-     // prevent endless loop
-     if (map.indexOf(value) >= 0)
-      return;
+      // prevent endless loop
+      if (map.indexOf(value) >= 0)
+         return;
 
       // add object to object map
       map.push(value);
@@ -957,13 +967,22 @@ function findFunction(name) {
 
 /** @summary Method to create http request, without promise can be used only in browser environment
   * @private */
-function createHttpRequest(url, kind, user_accept_callback, user_reject_callback, use_promise) {
+function createHttpRequest(url, kind, user_accept_callback, user_reject_callback, use_promise, tmout) {
+   function handle_error(xhr, message, code, abort_reason) {
+      if (!xhr.did_abort) {
+         xhr.did_abort = abort_reason || true;
+         xhr.abort();
+      }
+      if (!xhr.did_error || abort_reason)
+         console.warn(message);
+      if (!xhr.did_error) {
+         xhr.did_error = true;
+         xhr.error_callback(Error(message), code);
+      }
+   }
    function configureXhr(xhr) {
       xhr.http_callback = isFunc(user_accept_callback) ? user_accept_callback.bind(xhr) : () => {};
-      xhr.error_callback = isFunc(user_reject_callback) ? user_reject_callback.bind(xhr) : function(err) {
-         console.warn(err.message);
-         this.http_callback(null);
-      }.bind(xhr);
+      xhr.error_callback = isFunc(user_reject_callback) ? user_reject_callback.bind(xhr) : function() { this.http_callback(null); };
 
       if (!kind)
          kind = 'buf';
@@ -999,11 +1018,8 @@ function createHttpRequest(url, kind, user_accept_callback, user_reject_callback
 
       if (settings.HandleWrongHttpResponse && (method === 'GET') && isFunc(xhr.addEventListener)) {
          xhr.addEventListener('progress', function(oEvent) {
-            if (oEvent.lengthComputable && this.expected_size && (oEvent.loaded > this.expected_size)) {
-               this.did_abort = true;
-               this.abort();
-               this.error_callback(Error(`Server sends more bytes ${oEvent.loaded} than expected ${this.expected_size}. Abort I/O operation`), 598);
-            }
+            if (oEvent.lengthComputable && this.expected_size && (oEvent.loaded > this.expected_size))
+               handle_error(this, `Server sends more bytes ${oEvent.loaded} than expected ${this.expected_size}. Abort I/O operation`, 598);
          }.bind(xhr));
       }
 
@@ -1013,11 +1029,8 @@ function createHttpRequest(url, kind, user_accept_callback, user_reject_callback
 
          if ((this.readyState === 2) && this.expected_size) {
             const len = parseInt(this.getResponseHeader('Content-Length'));
-            if (Number.isInteger(len) && (len > this.expected_size) && !settings.HandleWrongHttpResponse) {
-               this.did_abort = 'large';
-               this.abort();
-               return this.error_callback(Error(`Server response size ${len} larger than expected ${this.expected_size}. Abort I/O operation`), 599);
-            }
+            if (Number.isInteger(len) && (len > this.expected_size) && !settings.HandleWrongHttpResponse)
+               return handle_error(this, `Server response size ${len} larger than expected ${this.expected_size}. Abort I/O operation`, 599, 'large');
          }
 
          if (this.readyState !== 4)
@@ -1026,7 +1039,7 @@ function createHttpRequest(url, kind, user_accept_callback, user_reject_callback
          if ((this.status !== 200) && (this.status !== 206) && !browser.qt6 &&
              // in these special cases browsers not always set status
              !((this.status === 0) && ((url.indexOf('file://') === 0) || (url.indexOf('blob:') === 0))))
-               return this.error_callback(Error(`Fail to load url ${url}`), this.status);
+               return handle_error(this, `Fail to load url ${url}`, this.status);
 
          if (this.nodejs_checkzip && (this.getResponseHeader('content-encoding') === 'gzip')) {
             // special handling of gzip JSON objects in Node.js
@@ -1069,6 +1082,11 @@ function createHttpRequest(url, kind, user_accept_callback, user_reject_callback
       if (nodejs && (method === 'GET') && (kind === 'object') && (url.indexOf('.json.gz') > 0)) {
          xhr.nodejs_checkzip = true;
          xhr.responseType = 'arraybuffer';
+      }
+
+      if (tmout && Number.isFinite(tmout)) {
+         xhr.timeout = tmout;
+         xhr.ontimeout = function() { handle_error(this, `Request ${url} timeout set ${tmout} ms`, 600, 'timeout'); };
       }
 
       return xhr;
@@ -1123,7 +1141,7 @@ async function injectCode(code) {
       }).then(_fs => {
          fs = _fs;
          fs.writeFileSync(name, code);
-         return import(/* webpackIgnore: true */ 'file://' + name);
+         return import(/* webpackIgnore: true */ /* @vite-ignore */ 'file://' + name);
       }).finally(() => fs.unlinkSync(name));
    }
 
@@ -1165,7 +1183,7 @@ async function loadModules(arg) {
       arg = arg.split(';');
    if (!arg.length)
       return true;
-   return import(/* webpackIgnore: true */ arg.shift()).then(() => loadModules(arg));
+   return import(/* webpackIgnore: true */ /* @vite-ignore */ arg.shift()).then(() => loadModules(arg));
 }
 
 /** @summary Load script or CSS file into the browser
@@ -1204,7 +1222,7 @@ async function loadScript(url) {
       if (url.indexOf('./') === 0)
          return import('fs').then(fs => injectCode(fs.readFileSync(url)));
 
-      return import(/* webpackIgnore: true */ url);
+      return import(/* webpackIgnore: true */ /* @vite-ignore */ url);
    }
 
    const match_url = src => {
@@ -1278,8 +1296,11 @@ const prROOT = 'ROOT.', clTObject = 'TObject', clTNamed = 'TNamed', clTString = 
       clTPolyLine3D = 'TPolyLine3D', clTPolyMarker3D = 'TPolyMarker3D',
       clTAttPad = 'TAttPad', clTPad = 'TPad', clTCanvas = 'TCanvas', clTFrame = 'TFrame', clTAttCanvas = 'TAttCanvas',
       clTGaxis = 'TGaxis', clTAttAxis = 'TAttAxis', clTAxis = 'TAxis', clTStyle = 'TStyle',
-      clTH1 = 'TH1', clTH1I = 'TH1I', clTH1F = 'TH1F', clTH1D = 'TH1D', clTH2 = 'TH2', clTH2I = 'TH2I', clTH2F = 'TH2F', clTH2D = 'TH2D', clTH3 = 'TH3',
-      clTF1 = 'TF1', clTF12 = 'TF12', clTF2 = 'TF2', clTF3 = 'TF3', clTProfile = 'TProfile', clTProfile2D = 'TProfile2D', clTProfile3D = 'TProfile3D',
+      clTH1 = 'TH1', clTH1I = 'TH1I', clTH1F = 'TH1F', clTH1D = 'TH1D',
+      clTH2 = 'TH2', clTH2I = 'TH2I', clTH2F = 'TH2F', clTH2D = 'TH2D',
+      clTH3 = 'TH3', clTH3I = 'TH3I', clTH3F = 'TH3F', clTH3D = 'TH3D',
+      clTProfile = 'TProfile', clTProfile2D = 'TProfile2D', clTProfile3D = 'TProfile3D',
+      clTF1 = 'TF1', clTF12 = 'TF12', clTF2 = 'TF2', clTF3 = 'TF3',
       clTGeoVolume = 'TGeoVolume', clTGeoNode = 'TGeoNode', clTGeoNodeMatrix = 'TGeoNodeMatrix',
       nsROOT = 'ROOT::', nsREX = nsROOT + 'Experimental::', nsSVG = 'http://www.w3.org/2000/svg',
       kNoZoom = -1111, kNoStats = BIT(9), kInspect = 'inspect', kTitle = 'title',
@@ -1419,7 +1440,7 @@ function create(typename, target) {
       case clTH1I:
       case clTH1D:
       case 'TH1L64':
-      case 'TH1F':
+      case clTH1F:
       case 'TH1S':
       case 'TH1C':
          create(clTH1, obj);
@@ -1432,7 +1453,7 @@ function create(typename, target) {
       case clTH2I:
       case 'TH2L64':
       case clTH2F:
-      case 'TH2D':
+      case clTH2D:
       case 'TH2S':
       case 'TH2C':
          create(clTH2, obj);
@@ -1442,10 +1463,10 @@ function create(typename, target) {
          create(clTH1, obj);
          extend(obj, { fTsumwy: 0, fTsumwy2: 0, fTsumwz: 0, fTsumwz2: 0, fTsumwxy: 0, fTsumwxz: 0, fTsumwyz: 0 });
          break;
-      case 'TH3I':
+      case clTH3I:
       case 'TH3L64':
-      case 'TH3F':
-      case 'TH3D':
+      case clTH3F:
+      case clTH3D:
       case 'TH3S':
       case 'TH3C':
          create(clTH3, obj);
@@ -2173,9 +2194,9 @@ export { version_id, version_date, version, source_dir, isNodeJs, isBatchMode, s
          clTAttLine, clTAttFill, clTAttMarker, clTAttText,
          clTPave, clTPaveText, clTPavesText, clTPaveStats, clTPaveLabel, clTPaveClass, clTDiamond,
          clTLegend, clTLegendEntry, clTPaletteAxis, clTImagePalette, clTText, clTLink, clTLatex, clTMathText, clTAnnotation, clTMultiGraph,
-         clTColor, clTLine, clTMarker, clTBox, clTPolyLine, clTPad, clTCanvas, clTFrame, clTAttCanvas, clTGaxis,
-         clTAxis, clTStyle, clTH1, clTH1I, clTH1F, clTH1D, clTH2, clTH2I, clTH2F, clTH2D, clTH3, clTF1, clTF12, clTF2, clTF3,
-         clTProfile, clTProfile2D, clTProfile3D, clTHStack,
+         clTColor, clTLine, clTMarker, clTBox, clTPolyLine, clTPad, clTCanvas, clTFrame, clTAttCanvas, clTGaxis, clTAxis, clTStyle,
+         clTH1, clTH1I, clTH1F, clTH1D, clTH2, clTH2I, clTH2F, clTH2D, clTH3, clTH3I, clTH3F, clTH3D,
+         clTProfile, clTProfile2D, clTProfile3D, clTF1, clTF12, clTF2, clTF3, clTHStack,
          clTGraph, clTGraph2DErrors, clTGraph2DAsymmErrors,
          clTGraphPolar, clTGraphPolargram, clTGraphTime, clTCutG,
          clTPolyLine3D, clTPolyMarker3D, clTGeoVolume, clTGeoNode, clTGeoNodeMatrix,

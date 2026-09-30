@@ -565,7 +565,7 @@ static int ll_ass_sub(CPyCppyy::LowLevelView* self, PyObject* key, PyObject* val
 
         // rvalue must be an exporter
         if (PyObject_GetBuffer(value, &src, PyBUF_FULL_RO) < 0) {
-            if (src.obj) CPyCppyy_PyBuffer_Release(value, &src);
+            if (src.obj) PyBuffer_Release(&src);
             return ret;
         }
 
@@ -581,7 +581,7 @@ static int ll_ass_sub(CPyCppyy::LowLevelView* self, PyObject* key, PyObject* val
         dest.len = dest.shape[0] * dest.itemsize;
 
         ret = copy_single(&dest, &src);
-        CPyCppyy_PyBuffer_Release(value, &src);
+        PyBuffer_Release(&src);
         return ret;
     }
 
@@ -980,12 +980,7 @@ PyTypeObject LowLevelView_Type = {
 #if PY_VERSION_HEX >= 0x03080000
     , 0                            // tp_vectorcall
 #endif
-#if PY_VERSION_HEX >= 0x030c0000
-    , 0                            // tp_watched
-#endif
-#if PY_VERSION_HEX >= 0x030d0000
-    , 0                            // tp_versions_used
-#endif
+    CPYCPPYY_PYTYPE_TAIL
 };
 
 } // namespace CPyCppyy
@@ -1093,8 +1088,9 @@ static inline CPyCppyy::LowLevelView* CreateLowLevelViewT(
         llp->fConverter = llp->fElemCnv;
     } else {
     // multi-dim array; sub-views are projected by using more LLViews
-        view.len        = nx * sizeof(void*);
-        view.itemsize   = sizeof(void*);
+        const size_t elemsize = isfix ? sizeof(T) : sizeof(void*);
+        view.len      = nx * elemsize;
+        view.itemsize = elemsize;
         for (Py_ssize_t idim = 1; idim < view.ndim; ++idim)
             view.shape[idim] = shape[idim];
 

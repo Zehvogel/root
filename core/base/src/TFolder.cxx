@@ -84,8 +84,6 @@ to save the pointer to the object as a class member or local variable
 if this pointer is used frequently or inside loops.
 */
 
-#include <iostream>
-#include "Strlen.h"
 #include "strlcpy.h"
 #include "TFolder.h"
 #include "TBrowser.h"
@@ -94,6 +92,9 @@ if this pointer is used frequently or inside loops.
 #include "TClass.h"
 #include "TError.h"
 #include "TRegexp.h"
+
+#include <iostream>
+#include <cstring>
 
 static const char *gFolderD[64];
 static Int_t gFolderLevel = -1;
@@ -418,7 +419,7 @@ void TFolder::ls(Option_t *option) const
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Return occurence number of object in the list of objects of this folder.
+/// Return occurrence number of object in the list of objects of this folder.
 /// The function returns the number of objects with the same name as object
 /// found in the list of objects in this folder before object itself.
 /// If only one object is found, return 0.

@@ -36,10 +36,6 @@
 #include "TKeyMapFile.h"
 #include "TVirtualPad.h"
 #include "Getline.h"
-#include "snprintf.h"
-#include <ctime>
-#include <cstring>
-#include <cstdlib>
 
 #include "TGFileBrowser.h"
 #include "TRootBrowser.h"
@@ -51,6 +47,11 @@
 #include "TVirtualX.h"
 
 #include "RConfigure.h"
+
+#include <cstdio>
+#include <ctime>
+#include <cstring>
+#include <cstdlib>
 
 #ifdef WIN32
 const char rootdir[] = "\\";
@@ -235,10 +236,6 @@ void TGFileBrowser::CreateBrowser()
 
    fDblClick = kFALSE;
 
-   if (TClass::GetClass("TGHtmlBrowser"))
-      TQObject::Connect("TGHtmlBrowser", "Clicked(char*)",
-                        "TGFileBrowser", this, "Selected(char*)");
-
    TQObject::Connect("TPad", "Modified()",
                      "TGFileBrowser", this, "PadModified()");
 
@@ -253,8 +250,6 @@ void TGFileBrowser::CreateBrowser()
 
 TGFileBrowser::~TGFileBrowser()
 {
-   if (TClass::GetClass("TGHtmlBrowser"))
-      TQObject::Disconnect("TGHtmlBrowser", "Clicked(char*)");
    TQObject::Disconnect("TPad", "Modified()");
 
    delete fContextMenu;
@@ -627,20 +622,6 @@ void TGFileBrowser::RecursiveRemove(TObject *obj)
 void TGFileBrowser::Refresh(Bool_t /*force*/)
 {
    TTimer::SingleShot(200, "TGFileBrowser", this, "Update()");
-   return; // disable refresh for the time being...
-   // coverity[unreachable]
-   TCursorSwitcher cursorSwitcher(this, fListTree);
-   static UInt_t prev = 0;
-   UInt_t curr =  gROOT->GetListOfBrowsables()->GetSize();
-   if (!prev) prev = curr;
-
-   if (prev != curr) { // refresh gROOT
-      TGListTreeItem *sav = fListLevel;
-      fListLevel = 0;
-      BrowseObj(gROOT);
-      fListLevel = sav;
-      prev = curr;
-   }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -764,8 +745,10 @@ void TGFileBrowser::AddFSDirectory(const char *entry, const char *path,
          pic = (TGPicture *)gClient->GetPicture("cdrom_t.xpm");
       else if (infos.Contains("Network"))
          pic = (TGPicture *)gClient->GetPicture("netdisk_t.xpm");
-      if (pic)
+      if (pic) {
          item->SetPictures(pic, pic);
+         gClient->FreePicture(pic);
+      }
    }
 }
 
@@ -1093,9 +1076,7 @@ TString TGFileBrowser::FullPathName(TGListTreeItem* item)
    TString dirname = itm->GetText();
 
    while ((parent=itm->GetParent())) {
-      char *s = gSystem->ConcatFileName(parent->GetText(), dirname);
-      dirname = s;
-      delete [] s;
+      gSystem->PrependPathName(parent->GetText(), dirname);
       itm = parent;
    }
    gSystem->ExpandPathName(dirname);
@@ -1810,7 +1791,7 @@ void TGFileBrowser::RequestFilter()
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// A ROOT File has been selected in TGHtmlBrowser.
+/// A ROOT File has been selected in TGFileBrowser.
 
 void TGFileBrowser::Selected(char *)
 {

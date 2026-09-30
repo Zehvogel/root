@@ -1,5 +1,4 @@
 /// \file ROOT/RNTupleSerialize.hxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \author Javier Lopez-Gomez <javier.lopez.gomez@cern.ch>
 /// \date 2021-08-02
@@ -75,6 +74,7 @@ public:
    static constexpr std::uint16_t kFlagRepetitiveField = 0x01;
    static constexpr std::uint16_t kFlagProjectedField = 0x02;
    static constexpr std::uint16_t kFlagHasTypeChecksum = 0x04;
+   static constexpr std::uint16_t kFlagIsSoACollection = 0x08;
 
    static constexpr std::uint16_t kFlagDeferredColumn = 0x01;
    static constexpr std::uint16_t kFlagHasValueRange = 0x02;

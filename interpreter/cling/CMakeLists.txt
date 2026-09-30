@@ -118,10 +118,6 @@ else()
   endif()
 endif()
 
-if( NOT "NVPTX" IN_LIST LLVM_TARGETS_TO_BUILD)
-  message(FATAL_ERROR "NVPTX backend is not activated\n"
-    "Please enable it via -DLLVM_TARGETS_TO_BUILD=\"host;NVPTX\"")
-endif()
 
 set(CLING_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(CLING_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
@@ -242,7 +238,7 @@ endif()
 
 if(MSVC)
   add_definitions(/DNOMINMAX)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /Zc:preprocessor /D CLANG_EXPORTS=1")
 endif()
 
 if (APPLE)
@@ -431,6 +427,10 @@ add_definitions( -D_GNU_SOURCE -DCLING_VERSION=${CLING_VERSION})
 option(CLING_INCLUDE_TESTS
        "Generate build targets for the Cling unit tests."
        ${LLVM_INCLUDE_TESTS})
+
+option(CLING_MINIMAL
+       "Skip the cling driver, libcling and the Jupyter kernel; build only the cling libraries."
+       OFF)
 
 if (NOT WIN32)
   set(cling_path_delim ":")

@@ -7,6 +7,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 
 namespace ROOT {
 namespace Experimental {
@@ -20,21 +21,54 @@ Objects of this type should be passed by value.
 Feedback is welcome!
 */
 class RBinIndex final {
-   static constexpr std::size_t UnderflowIndex = -3;
-   static constexpr std::size_t OverflowIndex = -2;
-   static constexpr std::size_t InvalidIndex = -1;
+   static constexpr auto kUnderflowIndex = static_cast<std::uint64_t>(-3);
+   static constexpr auto kOverflowIndex = static_cast<std::uint64_t>(-2);
+   static constexpr auto kInvalidIndex = static_cast<std::uint64_t>(-1);
 
-   std::size_t fIndex = InvalidIndex;
+   // We use std::uint64_t instead of std::size_t for the index because for sparse histograms, not all bins have to be
+   // allocated in memory. However, we require that the index has at least that size.
+   static_assert(sizeof(std::uint64_t) >= sizeof(std::size_t), "index type not large enough to address all bins");
+   // During construction, we expect that any standard integer fits in std::uint64_t.
+   static_assert(sizeof(std::uint64_t) >= sizeof(unsigned long long),
+                 "index type not large enough to store any standard integer");
+
+   std::uint64_t fIndex = kInvalidIndex;
 
 public:
    /// Construct an invalid bin index.
    RBinIndex() = default;
 
    /// Construct a bin index for a normal bin.
-   RBinIndex(std::size_t index) : fIndex(index) { assert(IsNormal()); }
+   RBinIndex(unsigned int index) : RBinIndex(static_cast<unsigned long long>(index)) {}
+
+   /// Construct a bin index for a normal bin.
+   RBinIndex(unsigned long index) : RBinIndex(static_cast<unsigned long long>(index)) {}
+
+   /// Construct a bin index for a normal bin.
+   RBinIndex(unsigned long long index) : fIndex(index) { assert(IsNormal()); }
+
+   /// Construct a bin index for a normal bin.
+   ///
+   /// \param[in] index signed integer that must not be negative
+   RBinIndex(int index) : RBinIndex(static_cast<long long>(index)) {}
+
+   /// Construct a bin index for a normal bin.
+   ///
+   /// \param[in] index signed integer that must not be negative
+   RBinIndex(long index) : RBinIndex(static_cast<long long>(index)) {}
+
+   /// Construct a bin index for a normal bin.
+   ///
+   /// \param[in] index signed integer that must not be negative
+   RBinIndex(long long index)
+   {
+      assert(index >= 0);
+      fIndex = static_cast<std::uint64_t>(index);
+      assert(IsNormal());
+   }
 
    /// Return the index for a normal bin.
-   std::size_t GetIndex() const
+   std::uint64_t GetIndex() const
    {
       assert(IsNormal());
       return fIndex;
@@ -43,28 +77,28 @@ public:
    /// A bin index is normal iff it is not one of the special values.
    ///
    /// Note that a normal bin index may not actually be valid for a given axis if it is outside its range.
-   bool IsNormal() const { return fIndex < UnderflowIndex; }
-   bool IsUnderflow() const { return fIndex == UnderflowIndex; }
-   bool IsOverflow() const { return fIndex == OverflowIndex; }
-   bool IsInvalid() const { return fIndex == InvalidIndex; }
+   bool IsNormal() const { return fIndex < kUnderflowIndex; }
+   bool IsUnderflow() const { return fIndex == kUnderflowIndex; }
+   bool IsOverflow() const { return fIndex == kOverflowIndex; }
+   bool IsInvalid() const { return fIndex == kInvalidIndex; }
 
-   RBinIndex &operator+=(std::size_t a)
+   RBinIndex &operator+=(std::uint64_t a)
    {
       if (!IsNormal()) {
          // Arithmetic operations on special values go to InvalidIndex.
-         fIndex = InvalidIndex;
+         fIndex = kInvalidIndex;
       } else {
-         std::size_t old = fIndex;
+         std::uint64_t old = fIndex;
          fIndex += a;
          if (fIndex < old || !IsNormal()) {
             // The addition wrapped around, go to InvalidIndex.
-            fIndex = InvalidIndex;
+            fIndex = kInvalidIndex;
          }
       }
       return *this;
    }
 
-   RBinIndex operator+(std::size_t a) const
+   RBinIndex operator+(std::uint64_t a) const
    {
       RBinIndex ret = *this;
       ret += a;
@@ -84,21 +118,21 @@ public:
       return old;
    }
 
-   RBinIndex &operator-=(std::size_t a)
+   RBinIndex &operator-=(std::uint64_t a)
    {
       if (!IsNormal()) {
          // Arithmetic operations on special values go to InvalidIndex.
-         fIndex = InvalidIndex;
+         fIndex = kInvalidIndex;
       } else if (fIndex >= a) {
          fIndex -= a;
       } else {
          // The operation would wrap around, go to InvalidIndex.
-         fIndex = InvalidIndex;
+         fIndex = kInvalidIndex;
       }
       return *this;
    }
 
-   RBinIndex operator-(std::size_t a) const
+   RBinIndex operator-(std::uint64_t a) const
    {
       RBinIndex ret = *this;
       ret -= a;
@@ -142,14 +176,14 @@ public:
    static RBinIndex Underflow()
    {
       RBinIndex underflow;
-      underflow.fIndex = UnderflowIndex;
+      underflow.fIndex = kUnderflowIndex;
       return underflow;
    }
 
    static RBinIndex Overflow()
    {
       RBinIndex overflow;
-      overflow.fIndex = OverflowIndex;
+      overflow.fIndex = kOverflowIndex;
       return overflow;
    }
 };

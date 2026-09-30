@@ -6,7 +6,10 @@
 /// \date 2025-08-21
 #include <ROOT/RLogger.hxx>
 
-#include <TApplication.h>
+#include "logging.hxx"
+#include "optparse.hxx"
+
+#include <TRint.h>
 #include <TBrowser.h>
 #include <TError.h>
 #include <TFile.h>
@@ -42,12 +45,6 @@ Examples:
   Open the ROOT file 'file.root' in a TBrowser
 )";
 
-static ROOT::RLogChannel &RootBrowseLog()
-{
-   static ROOT::RLogChannel channel("RootBrowse");
-   return channel;
-}
-
 struct RootBrowseArgs {
    enum class EPrintUsage {
       kNo,
@@ -55,73 +52,48 @@ struct RootBrowseArgs {
       kLong
    };
    EPrintUsage fPrintHelp = EPrintUsage::kNo;
-   std::string_view fWeb;
-   std::string_view fFileName;
+   std::string fWeb;
+   std::string fFileName;
 };
 
 static RootBrowseArgs ParseArgs(const char **args, int nArgs)
 {
    RootBrowseArgs outArgs;
-   bool forcePositional = false;
+   ROOT::RCmdLineOpts opts;
+   opts.AddFlag({"-h", "--help"});
+   opts.AddFlag({"-w", "--web"}, ROOT::RCmdLineOpts::EFlagType::kWithArg);
+   opts.AddFlag({"-wf", "--webOff"});
 
-   for (int i = 0; i < nArgs; ++i) {
-      const char *arg = args[i];
+   opts.Parse(args, nArgs);
 
-      if (strcmp(arg, "--") == 0) {
-         forcePositional = true;
-         continue;
-      }
-
-      bool isFlag = !forcePositional && arg[0] == '-';
-      if (isFlag) {
-         ++arg;
-         // Parse long or short flag and its argument into `argStr` / `nxtArgStr`.
-         std::string_view argStr, nxtArgStr;
-         if (arg[0] == '-') {
-            ++arg;
-            // long flag: may be either of the form `--web off` or `--web=off`
-            const char *eq = strchr(arg, '=');
-            if (eq) {
-               argStr = std::string_view(arg, eq - arg);
-               nxtArgStr = std::string_view(eq + 1);
-            } else {
-               argStr = std::string_view(arg);
-               if (i < nArgs - 1 && args[i + 1][0] != '-') {
-                  nxtArgStr = args[i + 1];
-                  ++i;
-               }
-            }
-         } else {
-            // short flag (note that it might be more than 1 character long, like `-wf`)
-            argStr = std::string_view(arg);
-            if (i < nArgs - 1 && args[i + 1][0] != '-') {
-               nxtArgStr = args[i + 1];
-               ++i;
-            }
-         }
-
-         if (argStr == "w" || argStr == "web") {
-            outArgs.fWeb = nxtArgStr.empty() ? "on" : nxtArgStr;
-         } else if (argStr == "h" || argStr == "help") {
-            outArgs.fPrintHelp = RootBrowseArgs::EPrintUsage::kLong;
-            break;
-         } else if (argStr == "wf" || argStr == "webOff") {
-            outArgs.fWeb = "off";
-         }
-
-      } else if (!outArgs.fFileName.empty()) {
-         outArgs.fPrintHelp = RootBrowseArgs::EPrintUsage::kShort;
-         break;
-      } else {
-         outArgs.fFileName = arg;
-      }
+   if (opts.ReportErrors()) {
+      outArgs.fPrintHelp = RootBrowseArgs::EPrintUsage::kShort;
+      return outArgs;
    }
+
+   if (opts.GetSwitch("help")) {
+      outArgs.fPrintHelp = RootBrowseArgs::EPrintUsage::kLong;
+      return outArgs;
+   }
+
+   if (auto web = opts.GetFlagValue("web"); !web.empty())
+      outArgs.fWeb = web;
+
+   if (opts.GetSwitch("webOff"))
+      outArgs.fWeb = "off";
+
+   if (opts.GetArgs().empty())
+      outArgs.fPrintHelp = RootBrowseArgs::EPrintUsage::kShort;
+   else
+      outArgs.fFileName = opts.GetArgs()[0];
 
    return outArgs;
 }
 
 int main(int argc, char **argv)
 {
+   InitLog("rootbrowse");
+   
    auto args = ParseArgs(const_cast<const char **>(argv) + 1, argc - 1);
    if (args.fPrintHelp != RootBrowseArgs::EPrintUsage::kNo) {
       std::cerr << kShortHelp;
@@ -134,7 +106,7 @@ int main(int argc, char **argv)
 
    // NOTE: we need to instantiate TApplication ourselves, otherwise TBrowser
    // will create a batch application that cannot show graphics.
-   TApplication app("rootbrowse", nullptr, nullptr);
+   TRint app("rootbrowse", nullptr, nullptr);
 
    if (!args.fWeb.empty())
       gROOT->SetWebDisplay(std::string(args.fWeb).c_str());
@@ -144,7 +116,8 @@ int main(int argc, char **argv)
       gErrorIgnoreLevel = kError;
       file = std::unique_ptr<TFile>(TFile::Open(std::string(args.fFileName).c_str(), "READ"));
       if (!file || file->IsZombie()) {
-         R__LOG_WARNING(RootBrowseLog()) << "File " << args.fFileName << " does not exist or is unreadable.";
+         Err() << "File " << args.fFileName << " does not exist or is unreadable.\n";
+         return 1;
       }
       gErrorIgnoreLevel = kUnset;
    }
@@ -157,11 +130,11 @@ int main(int argc, char **argv)
    // For classic graphics: ensure rootbrowse quits when the window is closed
    if (auto imp = browser->GetBrowserImp()) {
       if (auto mainframe = imp->GetMainFrame()) {        
-         mainframe->Connect("CloseWindow()", "TApplication", &app, "Terminate()");
+         mainframe->Connect("CloseWindow()", "TRint", &app, "Terminate()");
       }
    }
 
-   std::cout << "Press ctrl+c to exit.\n";
+   std::cout << ".q to exit.\n";
    while (!gROOT->IsInterrupted() && !gSystem->ProcessEvents()) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
    }

@@ -163,14 +163,6 @@ ifeq ($(BUILDFTGL), yes)
 FTGLCPPFLAGS   := -DBUILTIN_FTGL
 endif
 
-BUILDGLEW      := @buildglew@
-GLEWLIBDIR     := @glewlibdir@
-GLEWLIBS       := @glewlibs@
-GLEWINCDIR     := $(filter-out /usr/include, @glewincdir@)
-ifeq ($(BUILDGLEW), yes)
-GLEWCPPFLAGS   := -DBUILTIN_GLEW
-endif
-
 SRMIFCEINCDIR  := $(filter-out /usr/include, @srmifceincdir@)
 GLIB2INCDIR    := $(filter-out /usr/include, @glib2incdir@)
 
@@ -301,3 +293,5 @@ RLIBS          := @rlibs@
 RFLAGS         := @rflags@
 
 ROOTDRPMREL    := 1
+
+$(warning The use of Makefiles is deprecated since ROOT 6.42 and will be removed in ROOT 7.)

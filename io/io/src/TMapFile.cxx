@@ -14,7 +14,7 @@
 
 /**
 \class TMapFile
-\ingroup IO
+\ingroup io_files
 
 This class implements a shared memory region mapped to a file.
 Objects can be placed into this shared memory area using the Add()
@@ -333,15 +333,15 @@ TMapFile::TMapFile(const char *name, const char *title, Option_t *option,
    // Open file to which memory will be mapped
    if (create || update) {
 #ifndef WIN32
-      fFd = open(fname, O_RDWR | O_CREAT, 0644);
+      fFd = open(fname, O_RDWR | O_CREAT, 0666);
 #else
       fFd = (Longptr_t) CreateFile(fname,                    // pointer to name of the file
                      GENERIC_WRITE | GENERIC_READ,       // access (read-write) mode
                      FILE_SHARE_WRITE | FILE_SHARE_READ, // share mode
-                     NULL,                               // pointer to security attributes
+                     nullptr,                               // pointer to security attributes
                      OPEN_ALWAYS,                        // how to create
                      FILE_ATTRIBUTE_TEMPORARY,           // file attributes
-                     (HANDLE) NULL);                     // handle to file with attributes to copy
+                     (HANDLE) nullptr);                     // handle to file with attributes to copy
 #endif
       if (fFd == (Longptr_t)INVALID_HANDLE_VALUE) {
          SysError("TMapFile", "file %s can not be opened", fname);
@@ -355,10 +355,10 @@ TMapFile::TMapFile(const char *name, const char *title, Option_t *option,
       fFd = (Longptr_t) CreateFile(fname,                    // pointer to name of the file
                      GENERIC_READ,                       // access (read-write) mode
                      FILE_SHARE_WRITE | FILE_SHARE_READ, // share mode
-                     NULL,                               // pointer to security attributes
+                     nullptr,                               // pointer to security attributes
                      OPEN_EXISTING,                      // how to create
                      FILE_ATTRIBUTE_TEMPORARY,           // file attributes
-                     (HANDLE) NULL);                     // handle to file with attributes to copy
+                     (HANDLE) nullptr);                     // handle to file with attributes to copy
 #endif
       if (fFd == (Longptr_t)INVALID_HANDLE_VALUE) {
          SysError("TMapFile", "file %s can not be opened for reading", fname);
@@ -509,7 +509,7 @@ TMapFile::TMapFile(const char *name, const char *title, Option_t *option,
    return;
 
 zombie:
-   // error in file opening occured, make this object a zombie
+   // error in file opening occurred, make this object a zombie
    MakeZombie();
    newMapFile   = this;
    ROOT::Internal::gMmallocDesc = 0;
@@ -864,7 +864,7 @@ void TMapFile::CreateSemaphore(int pid)
    char buffer[] ="ROOT_Semaphore_xxxxxxxx";
    int lbuf = strlen(buffer);
    if (!pid) fSemaphore = getpid();
-   fhSemaphore = (ULongptr_t)CreateMutex(NULL,FALSE,itoa(fSemaphore,&buffer[lbuf-8],16));
+   fhSemaphore = (ULongptr_t)CreateMutex(nullptr,FALSE,itoa(fSemaphore,&buffer[lbuf-8],16));
    if (fhSemaphore == 0) fSemaphore = (Longptr_t)INVALID_HANDLE_VALUE;
 #endif
 #endif

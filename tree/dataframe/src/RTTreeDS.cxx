@@ -60,6 +60,14 @@ GetCollectionInfo(const std::string &typeName)
               ROOT::Internal::RDF::RTreeUntypedArrayColumnReader::ECollectionType::kStdArray};
    }
 
+   // Find TYPE from std::vector<TYPE>
+   if (auto pos = beginType.find("vector<"); pos != std::string::npos) {
+      const auto begin = typeName.find_first_of('<', pos) + 1;
+      const auto end = typeName.find_last_of('>');
+      const auto innerTypeName = typeName.substr(begin, end - begin);
+      return {true, innerTypeName, ROOT::Internal::RDF::RTreeUntypedArrayColumnReader::ECollectionType::kStdVector};
+   }
+
    return {false, "", ROOT::Internal::RDF::RTreeUntypedArrayColumnReader::ECollectionType::kRVec};
 }
 
@@ -378,11 +386,11 @@ ROOT::RDF::RSampleInfo ROOT::Internal::RDF::RTTreeDS::CreateSampleInfo(
    // If the tree is stored in a subdirectory, treename will be the full path to it starting with the root directory '/'
    const std::string &id = fname + (treename.rfind('/', 0) == 0 ? "" : "/") + treename;
    if (sampleMap.empty()) {
-      return RSampleInfo(id, range);
+      return RSampleInfo(id, range, nullptr, tree->GetEntries());
    } else {
       if (sampleMap.find(id) == sampleMap.end())
          throw std::runtime_error("Full sample identifier '" + id + "' cannot be found in the available samples.");
-      return RSampleInfo(id, range, sampleMap.at(id));
+      return RSampleInfo(id, range, sampleMap.at(id), tree->GetEntries());
    }
 }
 
@@ -522,7 +530,7 @@ ROOT::Internal::RDF::RTTreeDS::CreateColumnReader(unsigned int /*slot*/, std::st
    if (TDirectory *treeDir = treeReader->GetTree()->GetDirectory(); treeDir) {
       using Map_t = std::unordered_map<std::string, std::pair<std::string, unsigned int>>;
       const std::string bitmaskMapName =
-         std::string{"R_rdf_branchToBitmaskMapping_"} + treeReader->GetTree()->GetName();
+         std::string{"R_rdf_column_to_bitmask_mapping_"} + treeReader->GetTree()->GetName();
       if (Map_t const *columnMaskMap = treeDir->Get<Map_t>(bitmaskMapName.c_str()); columnMaskMap) {
          if (auto it = columnMaskMap->find(std::string(col)); it != columnMaskMap->end()) {
             colReader = std::make_unique<RMaskedColumnReader>(*treeReader, std::move(colReader), it->second.first,

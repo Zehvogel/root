@@ -1,5 +1,4 @@
 /// \file ROOT/RField.hxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \date 2018-10-09
 
@@ -69,14 +68,18 @@ class RFieldZero final : public RFieldBase {
    /// This flag is reset on Clone().
    bool fAllowFieldSubstitutions = false;
 
+   std::unordered_set<std::string> fSubfieldNames; ///< Efficient detection of duplicate field names
+
 protected:
    std::unique_ptr<RFieldBase> CloneImpl(std::string_view newName) const final;
    void ConstructValue(void *) const final {}
 
 public:
-   RFieldZero() : RFieldBase("", "", ROOT::ENTupleStructure::kRecord, false /* isSimple */) {}
+   RFieldZero();
 
-   using RFieldBase::Attach;
+   /// A public version of the Attach method that allows piece-wise construction of the zero field.
+   /// Will throw on duplicate subfield names.
+   void Attach(std::unique_ptr<RFieldBase> child);
    size_t GetValueSize() const final { return 0; }
    size_t GetAlignment() const final { return 0; }
 
@@ -102,8 +105,6 @@ public:
       /// The field could not be created because its descriptor had an unknown structural role
       kUnknownStructure,
    };
-
-   using RCategory R__DEPRECATED(6, 42, "enum renamed to ECategory") = ECategory;
 
 private:
    std::string fError;
@@ -133,12 +134,12 @@ public:
 /// The field for a class with dictionary
 class RClassField : public RFieldBase {
 private:
-   enum ESubFieldRole {
+   enum ESubfieldRole {
       kBaseClass,
       kDataMember,
    };
-   struct RSubFieldInfo {
-      ESubFieldRole fRole;
+   struct RSubfieldInfo {
+      ESubfieldRole fRole;
       std::size_t fOffset;
    };
    // Information to read into the staging area a field that is used as an input to an I/O customization rule
@@ -156,14 +157,13 @@ private:
       TClass *fClass;
 
    public:
-      explicit RClassDeleter(TClass *cl) : fClass(cl) {}
+      explicit RClassDeleter(TClass *cl);
       void operator()(void *objPtr, bool dtorOnly) final;
    };
 
    TClass *fClass;
    /// Additional information kept for each entry in `fSubfields`
-   std::vector<RSubFieldInfo> fSubfieldsInfo;
-   std::size_t fMaxAlignment = 1;
+   std::vector<RSubfieldInfo> fSubfieldsInfo;
 
    /// The staging area stores inputs to I/O rules according to the offsets given by the streamer info of
    /// "TypeName@@Version". The area is allocated depending on I/O rules resp. the source members of the I/O rules.
@@ -178,7 +178,7 @@ private:
 private:
    RClassField(std::string_view fieldName, const RClassField &source); ///< Used by CloneImpl
    RClassField(std::string_view fieldName, TClass *classp);
-   void Attach(std::unique_ptr<RFieldBase> child, RSubFieldInfo info);
+   void Attach(std::unique_ptr<RFieldBase> child, RSubfieldInfo info);
 
    /// Returns the id of member 'name' in the class field given by 'fieldId', or kInvalidDescriptorId if no such
    /// member exist. Looks recursively in base classes.
@@ -218,13 +218,15 @@ public:
    ~RClassField() override;
 
    std::vector<RValue> SplitValue(const RValue &value) const final;
-   size_t GetValueSize() const final;
-   size_t GetAlignment() const final { return fMaxAlignment; }
+   std::size_t GetValueSize() const final;
+   std::size_t GetAlignment() const final;
    std::uint32_t GetTypeVersion() const final;
    std::uint32_t GetTypeChecksum() const final;
    /// For polymorphic classes (that declare or inherit at least one virtual method), return the expected dynamic type
    /// of any user object. If the class is not polymorphic, return nullptr.
    const std::type_info *GetPolymorphicTypeInfo() const;
+   /// Return the TClass instance backing this field.
+   const TClass *GetClass() const { return fClass; }
    void AcceptVisitor(ROOT::Detail::RFieldVisitor &visitor) const final;
 };
 
@@ -236,7 +238,7 @@ private:
       TClass *fClass;
 
    public:
-      explicit RStreamerFieldDeleter(TClass *cl) : fClass(cl) {}
+      explicit RStreamerFieldDeleter(TClass *cl);
       void operator()(void *objPtr, bool dtorOnly) final;
    };
 
@@ -270,7 +272,7 @@ protected:
    void ReconcileOnDiskField(const RNTupleDescriptor &desc) final;
 
 public:
-   RStreamerField(std::string_view fieldName, std::string_view className, std::string_view typeAlias = "");
+   RStreamerField(std::string_view fieldName, std::string_view className);
    RStreamerField(RStreamerField &&other) = default;
    RStreamerField &operator=(RStreamerField &&other) = default;
    ~RStreamerField() final = default;
@@ -279,14 +281,27 @@ public:
    size_t GetAlignment() const final;
    std::uint32_t GetTypeVersion() const final;
    std::uint32_t GetTypeChecksum() const final;
+   TClass *GetClass() const { return fClass; }
    void AcceptVisitor(ROOT::Detail::RFieldVisitor &visitor) const final;
 };
 
+namespace Internal {
+std::unique_ptr<RFieldBase> CreateEmulatedEnumField(std::string_view fieldName, std::string_view emulatedFromType,
+                                                    std::string_view underlyingIntType);
+}
+
 /// The field for an unscoped or scoped enum with dictionary
 class REnumField : public RFieldBase {
+   friend std::unique_ptr<RFieldBase> Internal::CreateEmulatedEnumField(std::string_view fieldName,
+                                                                        std::string_view emulatedFromType,
+                                                                        std::string_view underlyingIntType);
+
 private:
    REnumField(std::string_view fieldName, TEnum *enump);
+   // Used by CloneImpl()
    REnumField(std::string_view fieldName, std::string_view enumName, std::unique_ptr<RFieldBase> intField);
+   // Used by field emulation
+   REnumField(std::string_view fieldName, std::string_view emulatedFromType, std::string_view underlyingIntType);
 
 protected:
    std::unique_ptr<RFieldBase> CloneImpl(std::string_view newName) const final;
@@ -316,7 +331,7 @@ template <typename T, typename = void>
 class RField final : public RClassField {
 public:
    static std::string TypeName() { return ROOT::Internal::GetRenormalizedTypeName(typeid(T)); }
-   RField(std::string_view name) : RClassField(name, TypeName())
+   RField(std::string_view name) : RClassField(name, Internal::GetDemangledTypeName(typeid(T)))
    {
       static_assert(std::is_class_v<T>, "no I/O support for this basic C++ type");
    }
@@ -435,6 +450,7 @@ public:
 #include "RField/RFieldProxiedCollection.hxx"
 #include "RField/RFieldRecord.hxx"
 #include "RField/RFieldSequenceContainer.hxx"
+#include "RField/RFieldSoA.hxx"
 #include "RField/RFieldSTLMisc.hxx"
 
 namespace ROOT {

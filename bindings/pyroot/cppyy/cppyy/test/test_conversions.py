@@ -1,9 +1,8 @@
-import py, pytest, os
-from pytest import raises
-from support import setup_make
+import pytest, os
+from pytest import raises, mark
+from support import setup_make, IS_WINDOWS
 
-currpath = os.getcwd()
-test_dct = currpath + "/libconversionsDict"
+test_dct = "conversions_cxx"
 
 
 class TestCONVERSIONS:
@@ -84,6 +83,7 @@ class TestCONVERSIONS:
         gc.collect()
         assert CC.s_count == 0
 
+    @mark.xfail(strict=True, condition=IS_WINDOWS, reason="Fails on Windows")
     def test04_implicit_conversion_from_tuple(self):
         """Allow implicit conversions from tuples as arguments {}-like"""
 

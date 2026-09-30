@@ -16,12 +16,12 @@ public:
 private:
    int ver;
    int fArray[2];
-   bool transientMember; //!
+   bool transientMember; ///<!
 
    ClassDefOverride(MyClass, 2)
 };
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class MyClass+;
 
 #pragma read sourceClass="MyClass" version="[1]" source="int ver" \

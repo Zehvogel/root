@@ -558,7 +558,11 @@ function objectHierarchy(top, obj, args = undefined) {
                }
             }
          }
-      } else if ((typeof fld === 'number') || (typeof fld === 'boolean') || (typeof fld === 'bigint')) {
+      } else if (typeof fld === 'bigint') {
+         simple = true;
+         item._value = fld.toString() + 'n';
+         item._vclass = cssValueNum;
+      } else if ((typeof fld === 'number') || (typeof fld === 'boolean')) {
          simple = true;
          if (key === 'fBits')
             item._value = '0x' + fld.toString(16);
@@ -758,7 +762,6 @@ function parseAsArray(val) {
                nbr--;
                break;
             }
-         // eslint-disable-next-line  no-fallthrough
          case ',':
             if (nbr === 0) {
                let sub = val.substring(last, indx).trim();
@@ -1420,6 +1423,9 @@ class HierarchyPainter extends BasePainter {
       if (!element_title)
          element_title = element_name;
 
+      if (hitem._filter)
+         element_name += ' *';
+
       d3a.attr('title', element_title)
          .text(element_name + ('_value' in hitem ? ':' : ''))
          .style('background', hitem._background ? hitem._background : null);
@@ -1439,6 +1445,8 @@ class HierarchyPainter extends BasePainter {
          for (let i = 0; i < hitem._childs.length; ++i) {
             const chld = hitem._childs[i];
             chld._parent = hitem;
+            if (hitem._filter && chld._name && chld._name.indexOf(hitem._filter) < 0)
+               continue;
             if (!this.addItemHtml(chld, d3chlds, i))
                break; // if too many items, skip rest
          }
@@ -1868,21 +1876,21 @@ class HierarchyPainter extends BasePainter {
    /** @summary alternative context menu, used in the object inspector
      * @private */
    direct_contextmenu(evnt, elem) {
-      evnt.preventDefault();
       const itemname = d3_select(elem.parentNode.parentNode).attr('item'),
             hitem = this.findItem(itemname);
-      if (!hitem)
+      if (!hitem || !isFunc(this.fill_context))
          return;
 
-      if (isFunc(this.fill_context)) {
-         createMenu(evnt, this).then(menu => {
-            this.fill_context(menu, hitem);
-            if (menu.size() > 0) {
-               menu.tree_node = elem.parentNode;
-               menu.show();
-            }
-         });
-      }
+      evnt.preventDefault();
+      evnt.stopPropagation();
+
+      createMenu(evnt, this).then(menu => {
+         this.fill_context(menu, hitem);
+         if (menu.size() > 0) {
+            menu.tree_node = elem.parentNode;
+            menu.show();
+         }
+      });
    }
 
    /** @summary Fills settings menu items
@@ -1928,11 +1936,12 @@ class HierarchyPainter extends BasePainter {
    /** @summary Handle context menu in the hierarchy
      * @private */
    tree_contextmenu(evnt, elem) {
-      evnt.preventDefault();
       const itemname = d3_select(elem.parentNode.parentNode).attr('item'),
             hitem = this.findItem(itemname);
       if (!hitem)
          return;
+      evnt.preventDefault();
+      evnt.stopPropagation();
 
       const onlineprop = this.getOnlineProp(itemname),
             fileprop = this.getFileProp(itemname);
@@ -2102,6 +2111,15 @@ class HierarchyPainter extends BasePainter {
                if (hitem._childs === undefined)
                   menu.add('Expand', () => this.expandItem(itemname), 'Expand content of object');
                else {
+                  if (sett.handle?.pm || (hitem._childs.length > 25)) {
+                     menu.add('Filter...', () => menu.input('Enter items to select', hitem._filter, f => {
+                        const changed = hitem._filter !== f;
+                        hitem._filter = f;
+                        if (changed)
+                           this.updateTreeNode(hitem);
+                     }), 'Filter out items based on input pattern');
+                  }
+
                   menu.add('Unexpand', () => {
                      hitem._more = true;
                      delete hitem._childs;
@@ -2279,10 +2297,8 @@ class HierarchyPainter extends BasePainter {
             if (use_dflt_opt && !drawopt && handle?.dflt && (handle.dflt !== kExpand))
                drawopt = handle.dflt;
 
-            if (dom) {
-               const func = updating ? redraw : draw;
-               return func(dom, obj, drawopt).then(p => complete(p)).catch(err => complete(null, err));
-            }
+            if (dom)
+               return (updating ? redraw : draw)(dom, obj, drawopt).then(p => complete(p)).catch(err => complete(null, err));
 
             let did_activate = false;
             const arr = [];
@@ -2327,8 +2343,8 @@ class HierarchyPainter extends BasePainter {
             mdi.activateFrame(frame);
 
             return draw(frame, obj, drawopt)
-                         .then(p => complete(p))
-                         .catch(err => complete(null, err));
+                       .then(p => complete(p))
+                       .catch(err => complete(null, err));
          });
       });
    }
@@ -2890,8 +2906,9 @@ class HierarchyPainter extends BasePainter {
          if ((hitem._more === false) || (!hitem._parent && hitem._childs))
             return;
 
-         if (hitem._childs && hitem._isopen) {
-            hitem._isopen = false;
+         // for the file expand always just toggle isopen flag
+         if (hitem._childs && (hitem._isopen || hitem._file)) {
+            hitem._isopen = !hitem._isopen;
             if (!silent)
                this.updateTreeNode(hitem, d3cont);
             return;
@@ -3045,12 +3062,15 @@ class HierarchyPainter extends BasePainter {
          }
 
          return this.refreshHtml();
-      }).catch(() => {
+      }).catch(err => {
          // make CORS warning
-         if (isBatchMode())
-            console.error(`Fail to open ${msg} - check CORS headers`);
-         else if (!d3_select('#gui_fileCORS').style('background', 'red').empty())
-            setTimeout(() => d3_select('#gui_fileCORS').style('background', ''), 5000);
+         const elem = isBatchMode() ? null : d3_select('#gui_fileCORS');
+         if (!elem || elem.empty())
+            console.error(`Fail to open ${msg} - ${err?.message ?? 'check CORS headers'}`);
+         else {
+            elem.style('background', 'red');
+            setTimeout(() => elem.style('background', ''), 5000);
+         }
          return false;
       }).finally(() => showProgress());
    }
@@ -3192,7 +3212,7 @@ class HierarchyPainter extends BasePainter {
          case 'draw_tree': return import('../draw/TTree.mjs');
          case 'hierarchy': return { HierarchyPainter, markAsStreamerInfo };
       }
-      return import(/* webpackIgnore: true */ module);
+      return import(/* webpackIgnore: true */ /* @vite-ignore */ module);
    }
 
    /** @summary set cached object for gui drawing
@@ -3285,7 +3305,7 @@ class HierarchyPainter extends BasePainter {
                   handleAfterRequest(findFunction(item._after_request)); // v6 support
             } else
                handleAfterRequest(draw_handle?.after_request);
-         }, undefined, true).then(xhr => {
+         }, undefined, true, settings.ServerTimeout).then(xhr => {
             itemreq = xhr;
             xhr.send(null);
          });
@@ -3601,7 +3621,7 @@ class HierarchyPainter extends BasePainter {
       }
 
       // check that we can found frame where drawing should be done
-      if (!document.getElementById(this.disp_frameid))
+      if (!this.disp_frameid || !document.getElementById(this.disp_frameid))
          return null;
 
       if (isBatchMode())
@@ -3690,6 +3710,9 @@ class HierarchyPainter extends BasePainter {
          return loadScript(scripts);
 
       return _ensureJSROOT().then(v6 => {
+         // this is the case when jsroot.js load directly
+         if (!v6.require)
+            return loadScript(scripts).then(() => globalThis.JSROOT);
          return v6.require(modules)
                   .then(() => loadScript(scripts))
                   .then(() => v6._complete_loading());
@@ -3801,8 +3824,8 @@ class HierarchyPainter extends BasePainter {
       if (!browser_configured && (browser.screenWidth <= 640))
          browser_kind = 'float';
 
-      this.no_select = getOption('noselect');
-      this.top_info = getOption('info');
+      this.no_select ??= getOption('noselect');
+      this.top_info ??= getOption('info');
 
       if (getOption('files_monitoring') !== null)
          this.files_monitoring = true;
@@ -4062,7 +4085,7 @@ class HierarchyPainter extends BasePainter {
                     '<label style="margin-right:5px"><input type="checkbox" name="monitoring" class="gui_monitoring"/>Monitoring</label>';
       } else if (!this.no_select) {
          const myDiv = d3_select('#' + this.gui_div),
-               files = myDiv.attr('files') || '../files/hsimple.root',
+               files = myDiv.attr('files') || 'https://root.cern/js/files/hsimple.root',
                path = decodeUrl().get('path') || myDiv.attr('path') || '',
                arrFiles = files.split(';');
 
@@ -4096,6 +4119,7 @@ class HierarchyPainter extends BasePainter {
       const title_elem = this.brlayout.setBrowserTitle(this.top_info || (this.is_online ? 'ROOT online server' : 'Read a ROOT file'));
       title_elem?.on('contextmenu', evnt => {
          evnt.preventDefault();
+         evnt.stopPropagation();
          createMenu(evnt).then(menu => {
             this.fillSettingsMenu(menu, true);
             menu.show();

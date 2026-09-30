@@ -1,13 +1,13 @@
-#ifndef __CINT__
+#ifndef __CLING__
 
 #include "TExMap.h"
-#include "Riostream.h"
 
 #endif
 
 
 #include "Rtypes.h"
 
+#include <iostream>
 
 Bool_t TestUpdate()
 {

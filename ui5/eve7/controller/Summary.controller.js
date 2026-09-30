@@ -66,7 +66,7 @@ sap.ui.define([
                            new mText({text:" {treeModel>fName}", tooltip: "{treeModel>fTitle}" , renderWhitespace: true, wrapping: false })
                          ]
                       }),
-                      new mButton({ id: "detailBtn", visible: "{treeModel>fShowButton}", icon: "sap-icon://edit", type: "Transparent", tooltip: "Actiavte GED", press: this.pressGedButton.bind(this) })
+                      new mButton({ id: "detailBtn", visible: "{treeModel>fShowButton}", icon: "sap-icon://edit", type: "Transparent", tooltip: "Open Editor", press: this.pressGedButton.bind(this) })
                     ]
                 })
             ],
@@ -299,6 +299,11 @@ sap.ui.define([
       createSummaryModel: function(tgt, src, path) {
          for (let n=0;n<src.length;++n) {
             let elem = src[n];
+
+            // exclude members of EveWorld (fElementId === 1) like Camera list
+            if (elem.fMotherId === 1 && elem.fName === "Cameras") {
+               continue;
+            }
 
             let newelem = { fName: elem.fName, fTitle: elem.fTitle || elem.fName, id: elem.fElementId, fHighlight: "None", fBackground: "", fMainColor: "", fSelected: false };
 

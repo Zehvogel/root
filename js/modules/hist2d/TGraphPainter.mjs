@@ -1,6 +1,6 @@
 import { gStyle, BIT, settings, create, createHistogram, setHistogramTitle, isFunc, isStr,
          clTPaveStats, clTCutG, clTH1F, clTH2F, clTF1, clTF2, clTPad, kNoZoom, kNoStats } from '../core.mjs';
-import { select as d3_select } from '../d3.mjs';
+import { select as d3_select, pointer as d3_pointer } from '../d3.mjs';
 import { DrawOptions, buildSvgCurve, makeTranslate, addHighlightStyle } from '../base/BasePainter.mjs';
 import { ObjectPainter, kAxisNormal } from '../base/ObjectPainter.mjs';
 import { FunctionsHandler } from './THistPainter.mjs';
@@ -69,17 +69,21 @@ class TGraphPainter extends ObjectPainter {
    getHistogram() { return this.getObject()?.fHistogram; }
 
    /** @summary Return true if histogram not present or has dummy ranges (for requested axis) */
-   isDummyHistogram(check_axis) {
-      const histo = this.getHistogram();
+   isDummyHistogram(check_axis, histo = null) {
+      if (!histo)
+         histo = this.getHistogram();
       if (!histo)
          return true;
 
       let is_normal = false;
-      if (check_axis !== 'y')
-         is_normal ||= (histo.fXaxis.fXmin !== 0.0011) || (histo.fXaxis.fXmax !== 1.1);
+      if (check_axis !== 'y') {
+         is_normal ||= ((histo.fXaxis.fXmin !== 0.0011) && (histo.fXaxis.fXmin !== 0)) ||
+                       ((histo.fXaxis.fXmax !== 1.1) && (histo.fXaxis.fXmax !== 1));
+      }
 
       if (check_axis !== 'x') {
-         is_normal ||= (histo.fYaxis.fXmin !== 0.0011) || (histo.fYaxis.fXmax !== 1.1) ||
+         is_normal ||= ((histo.fYaxis.fXmin !== 0.0011) && (histo.fYaxis.fXmin !== 0)) ||
+                       ((histo.fYaxis.fXmax !== 1.1) && (histo.fYaxis.fXmax !== 1)) ||
                        (histo.fMinimum !== 0.0011) || (histo.fMaximum !== 1.1);
       }
 
@@ -421,7 +425,7 @@ class TGraphPainter extends ObjectPainter {
      * @desc graph bins should be created when calling this function
      * @param {boolean} [set_x] - set X axis range
      * @param {boolean} [set_y] - set Y axis range */
-   createHistogram(set_x = true, set_y = true) {
+   createHistogram(set_x = true, set_y = true, histo = null) {
       const graph = this.getGraph(),
             xmin = this.xmin,
             margin = this.getHistRangeMargin();
@@ -441,7 +445,8 @@ class TGraphPainter extends ObjectPainter {
          maximum = (1 - margin) * ymax;
 
       const minimum0 = minimum, maximum0 = maximum;
-      let histo = this.getHistogram();
+      if (!histo)
+         histo = this.getHistogram();
 
       if (!this.isScatter() && !histo?.fXaxis.fTimeDisplay) {
          const pad_logx = this.getPadPainter()?.getPadLog('x');
@@ -458,7 +463,8 @@ class TGraphPainter extends ObjectPainter {
          histo.fBits |= kNoStats;
          this.#own_histogram = true;
          this.setHistogram(histo);
-      } else if ((histo.fMaximum !== kNoZoom) && (histo.fMinimum !== kNoZoom) && !this.isDummyHistogram('y')) {
+      } else if ((histo.fMaximum !== kNoZoom) && (histo.fMinimum !== kNoZoom) &&
+                 !histo.$set_graph_range && !this.isDummyHistogram('y', histo)) {
          minimum = histo.fMinimum;
          maximum = histo.fMaximum;
       }
@@ -485,6 +491,7 @@ class TGraphPainter extends ObjectPainter {
          if (!this.isScatter()) {
             histo.fMinimum = minimum;
             histo.fMaximum = maximum;
+            histo.$set_graph_range = true;
          }
       }
 
@@ -1035,7 +1042,7 @@ class TGraphPainter extends ObjectPainter {
       if (o._pfc > 1 || o._plc > 1 || o._pmc > 1) {
          const pp = this.getPadPainter();
          if (isFunc(pp?.getAutoColor)) {
-            const icolor = pp.getAutoColor(graph.$num_graphs);
+            const icolor = pp.getAutoColor();
             this.#auto_exec = ''; // can be reused when sending option back to server
             if (o._pfc > 1) {
                o._pfc = 1;
@@ -1510,7 +1517,7 @@ class TGraphPainter extends ObjectPainter {
    }
 
    /** @summary Complete moving */
-   moveEnd(not_changed) {
+   moveEnd(not_changed, evnt) {
       const graph = this.getGraph(), last = graph?.fNpoints - 1;
       let exec = '';
 
@@ -1539,6 +1546,17 @@ class TGraphPainter extends ObjectPainter {
                this.redrawPad();
             else
                this.drawGraph();
+         }
+      } else if (not_changed) {
+         const fp = this.getFramePainter(),
+               m = d3_pointer(evnt, fp.getFrameSvg().node()),
+               fw = fp.getFrameWidth(), fh = fp.getFrameHeight(),
+               valid_x = (m[0] >= 0) && (m[0] <= fw),
+               valid_y = (m[1] >= 0) && (m[1] <= fh);
+         if (valid_x && valid_y) {
+            evnt.preventDefault();
+            evnt.stopPropagation();
+            fp.processFrameClick({ x: m[0], y: m[1] });
          }
       } else {
          changeBin(this.#move_bin);
@@ -1668,7 +1686,7 @@ class TGraphPainter extends ObjectPainter {
 
       // if our own histogram was used as axis drawing, we need update histogram as well
       if (this.axes_draw) {
-         const histo = this.createHistogram(),
+         const histo = this.createHistogram(true, true, obj.fHistogram),
                hist_painter = this.getMainPainter();
          if (hist_painter?.isSecondary(this)) {
             hist_painter.updateObject(histo, o.Axis);
@@ -1738,8 +1756,6 @@ class TGraphPainter extends ObjectPainter {
       // do not create stats box when drawing canvas
       if (!st.fOptFit || this.getCanvPainter()?.getRootPad(true)?.fPrimitives?.arr.length)
          return null;
-
-      this.create_stats = true;
 
       stats = create(clTPaveStats);
       Object.assign(stats, {

@@ -1,5 +1,4 @@
 /// \file RField.cxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \date 2018-10-15
 
@@ -38,11 +37,27 @@ void ROOT::Internal::SetAllowFieldSubstitutions(RFieldZero &fieldZero, bool val)
    fieldZero.fAllowFieldSubstitutions = val;
 }
 
+void ROOT::RFieldZero::Attach(std::unique_ptr<RFieldBase> child)
+{
+   const std::string childName = child->GetFieldName();
+   if (fSubfieldNames.count(childName) > 0)
+      throw RException(R__FAIL("duplicate field name: " + childName));
+   RFieldBase::Attach(std::move(child), "");
+   fSubfieldNames.insert(childName);
+}
+
+ROOT::RFieldZero::RFieldZero() : RFieldBase("", "", ROOT::ENTupleStructure::kRecord, false /* isSimple */)
+{
+   fTraits |= kTraitExtensible;
+}
+
 std::unique_ptr<ROOT::RFieldBase> ROOT::RFieldZero::CloneImpl(std::string_view /*newName*/) const
 {
    auto result = std::make_unique<RFieldZero>();
-   for (auto &f : fSubfields)
+   for (auto &f : fSubfields) {
       result->Attach(f->Clone(f->GetFieldName()));
+      result->fSubfieldNames.insert(f->GetFieldName());
+   }
    return result;
 }
 
@@ -88,7 +103,12 @@ void ROOT::RCardinalityField::ReconcileOnDiskField(const RNTupleDescriptor &desc
                                   " expects an on-disk leaf field of the same type\n" +
                                   Internal::GetTypeTraceReport(*this, desc)));
       }
-   } else if (fieldDesc.GetStructure() != ENTupleStructure::kCollection) {
+   } else if (fieldDesc.GetStructure() == ENTupleStructure::kCollection) {
+      if (!fieldDesc.IsSoACollection() && fieldDesc.GetTypeVersion() != 0) {
+         throw RException(R__FAIL("invalid on-disk type version for RCardinalityField " + GetQualifiedFieldName() +
+                                  "\n" + Internal::GetTypeTraceReport(*this, desc)));
+      }
+   } else {
       throw RException(R__FAIL("invalid on-disk structural role for RCardinalityField " + GetQualifiedFieldName() +
                                "\n" + Internal::GetTypeTraceReport(*this, desc)));
    }
@@ -117,7 +137,7 @@ void ROOT::RSimpleField<T>::ReconcileIntegralField(const RNTupleDescriptor &desc
    EnsureMatchingOnDiskField(desc, kDiffTypeName);
 
    const RFieldDescriptor &fieldDesc = desc.GetFieldDescriptor(GetOnDiskId());
-   if (fieldDesc.IsCustomEnum(desc)) {
+   if (Internal::IsCustomEnumFieldDesc(desc, fieldDesc)) {
       SetOnDiskId(desc.FindFieldId("_0", GetOnDiskId()));
       return;
    }
@@ -557,26 +577,13 @@ ROOT::RRecordField::RRecordField(std::string_view name, const RRecordField &sour
 {
    for (const auto &f : source.GetConstSubfields())
       Attach(f->Clone(f->GetFieldName()));
+   fSubfieldNames = source.fSubfieldNames;
    fTraits = source.fTraits;
 }
 
 ROOT::RRecordField::RRecordField(std::string_view fieldName, std::string_view typeName)
    : ROOT::RFieldBase(fieldName, typeName, ROOT::ENTupleStructure::kRecord, false /* isSimple */)
 {
-}
-
-void ROOT::RRecordField::AttachItemFields(std::vector<std::unique_ptr<RFieldBase>> itemFields)
-{
-   fTraits |= kTraitTrivialType;
-   for (auto &item : itemFields) {
-      fMaxAlignment = std::max(fMaxAlignment, item->GetAlignment());
-      fSize += GetItemPadding(fSize, item->GetAlignment()) + item->GetValueSize();
-      fTraits &= item->GetTraits();
-      Attach(std::move(item));
-   }
-   // Trailing padding: although this is implementation-dependent, most add enough padding to comply with the
-   // requirements of the type with strictest alignment
-   fSize += GetItemPadding(fSize, fMaxAlignment);
 }
 
 std::unique_ptr<ROOT::RFieldBase>
@@ -600,25 +607,62 @@ ROOT::RRecordField::RRecordField(std::string_view fieldName, std::vector<std::un
                                  std::string_view emulatedFromType)
    : ROOT::RFieldBase(fieldName, emulatedFromType, ROOT::ENTupleStructure::kRecord, false /* isSimple */)
 {
-   fTraits |= kTraitTrivialType;
-   fOffsets.reserve(itemFields.size());
-   for (auto &item : itemFields) {
-      fSize += GetItemPadding(fSize, item->GetAlignment());
-      fOffsets.push_back(fSize);
-      fMaxAlignment = std::max(fMaxAlignment, item->GetAlignment());
-      fSize += item->GetValueSize();
-      fTraits &= item->GetTraits();
-      Attach(std::move(item));
-   }
+   AttachItemFields(std::move(itemFields));
    fTraits |= !emulatedFromType.empty() * kTraitEmulatedField;
-   // Trailing padding: although this is implementation-dependent, most add enough padding to comply with the
-   // requirements of the type with strictest alignment
-   fSize += GetItemPadding(fSize, fMaxAlignment);
 }
 
 ROOT::RRecordField::RRecordField(std::string_view fieldName, std::vector<std::unique_ptr<RFieldBase>> itemFields)
    : ROOT::RRecordField(fieldName, std::move(itemFields), "")
 {
+   fTraits |= kTraitExtensible;
+}
+
+void ROOT::RRecordField::AddItem(std::unique_ptr<RFieldBase> item)
+{
+   fSize += GetItemPadding(fSize, item->GetAlignment());
+   if (!IsPairOrTuple()) {
+      fOffsets.emplace_back(fSize);
+   }
+   fSize += item->GetValueSize();
+   fMaxAlignment = std::max(fMaxAlignment, item->GetAlignment());
+   fTraits &= item->GetTraits() | (fTraits & kTraitExtensible); // may be called by AddItemToRecord()
+
+   if (IsPairOrTuple()) {
+      Attach(std::move(item), "_" + std::to_string(fSubfields.size()));
+   } else {
+      const std::string itemName = item->GetFieldName();
+      if (fSubfieldNames.count(itemName) > 0)
+         throw RException(R__FAIL("duplicate field name: " + itemName));
+      Attach(std::move(item));
+      fSubfieldNames.insert(itemName);
+   }
+}
+
+void ROOT::Internal::AddItemToRecord(RRecordField &record, std::unique_ptr<RFieldBase> newItem)
+{
+   // Only supported for untyped records
+   assert(record.GetTypeName().empty());
+   record.AddItem(std::move(newItem));
+
+   // For nested record fields, we have to reattach all fields of all parents because the modification to the
+   // current field will change its size and may change its alignment and hence the layout of all parents.
+   auto parent = record.fParent;
+   while (parent && typeid(*parent) != typeid(RFieldZero)) {
+      // untyped records can only have an untyped record as parent
+      assert(dynamic_cast<RRecordField *>(parent) && parent->GetTypeName().empty());
+
+      auto precord = static_cast<RRecordField *>(parent);
+      std::vector<std::unique_ptr<ROOT::RFieldBase>> subfields;
+      std::swap(precord->fSubfields, subfields);
+      precord->fTraits = ROOT::RFieldBase::kTraitExtensible;
+      precord->fSubfieldNames.clear();
+      precord->fMaxAlignment = 1;
+      precord->fSize = 0;
+      precord->fOffsets.clear();
+      precord->AttachItemFields(std::move(subfields));
+
+      parent = precord->fParent;
+   }
 }
 
 std::size_t ROOT::RRecordField::GetItemPadding(std::size_t baseOffset, std::size_t itemAlignment) const
@@ -706,7 +750,7 @@ std::unique_ptr<ROOT::RFieldBase::RDeleter> ROOT::RRecordField::GetDeleter() con
    for (const auto &f : fSubfields) {
       itemDeleters.emplace_back(GetDeleterOf(*f));
    }
-   return std::make_unique<RRecordDeleter>(std::move(itemDeleters), fOffsets);
+   return std::make_unique<RRecordDeleter>(std::move(itemDeleters), fOffsets, GetAlignment());
 }
 
 std::vector<ROOT::RFieldBase::RValue> ROOT::RRecordField::SplitValue(const RValue &value) const
@@ -842,7 +886,10 @@ ROOT::RNullableField::RNullableField(std::string_view fieldName, const std::stri
    : ROOT::RFieldBase(fieldName, typePrefix + "<" + itemField->GetTypeName() + ">", ROOT::ENTupleStructure::kCollection,
                       false /* isSimple */)
 {
-   Attach(std::move(itemField));
+   if (!itemField->GetTypeAlias().empty())
+      fTypeAlias = typePrefix + "<" + itemField->GetTypeAlias() + ">";
+
+   Attach(std::move(itemField), "_0");
 }
 
 const ROOT::RFieldBase::RColumnRepresentations &ROOT::RNullableField::GetColumnRepresentations() const
@@ -980,6 +1027,7 @@ void *ROOT::RUniquePtrField::PrepareRead(void *to, bool hasOnDiskValue)
    if (isValidValue && !hasOnDiskValue) {
       ptr->release();
       fItemDeleter->operator()(valuePtr, false /* dtorOnly */);
+      valuePtr = nullptr;
    } else if (!isValidValue && hasOnDiskValue) {
       valuePtr = CallCreateObjectRawPtrOn(*fSubfields[0]);
       ptr->reset(reinterpret_cast<char *>(valuePtr));
@@ -1141,7 +1189,7 @@ std::unique_ptr<ROOT::RFieldBase::RDeleter> ROOT::ROptionalField::GetDeleter() c
 {
    return std::make_unique<ROptionalDeleter>(
       (fSubfields[0]->GetTraits() & kTraitTriviallyDestructible) ? nullptr : GetDeleterOf(*fSubfields[0]),
-      fSubfields[0]->GetValueSize());
+      fSubfields[0]->GetValueSize(), GetAlignment());
 }
 
 std::vector<ROOT::RFieldBase::RValue> ROOT::ROptionalField::SplitValue(const RValue &value) const
@@ -1183,7 +1231,11 @@ ROOT::RAtomicField::RAtomicField(std::string_view fieldName, std::unique_ptr<RFi
       fTraits |= kTraitTriviallyConstructible;
    if (itemField->GetTraits() & kTraitTriviallyDestructible)
       fTraits |= kTraitTriviallyDestructible;
-   Attach(std::move(itemField));
+
+   if (!itemField->GetTypeAlias().empty())
+      fTypeAlias = "std::atomic<" + itemField->GetTypeAlias() + ">";
+
+   Attach(std::move(itemField), "_0");
 }
 
 std::unique_ptr<ROOT::RFieldBase> ROOT::RAtomicField::CloneImpl(std::string_view newName) const

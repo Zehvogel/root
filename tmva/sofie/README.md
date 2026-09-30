@@ -7,15 +7,15 @@ This is a new development in TMVA and is currently in early experimental stage. 
 
 
 ## Prerequisite
-- Protobuf 3.0 or higher (for input of ONNX model files)
 - BLAS or Eigen (for execution of the generated code for inference)
 
 ## Installation
 
-Build ROOT with the cmake option tmva-sofie enabled.
+SOFIE is built as part of TMVA, so it is enabled whenever ROOT is built with
+the `tmva` cmake option (which is ON by default).
 
 ```bash
-cmake ../root -Dtmva-sofie=ON
+cmake ../root -Dtmva=ON
 make -j8
 ```
 
@@ -66,7 +66,6 @@ With the default settings, the weights are contained in a separate binary file, 
 model.Generate(Options::kNoWeightFile);
 ```
 
-Other such options includes `Options::kNoSession` (for not generating the Session class, and instead keeping the infer function independent).
 SOFIE also supports generating inference code with RDataFrame as inputs, refer to the tutorials below for examples.
 
 ## Supported ONNX operators
@@ -175,10 +174,8 @@ parser.CheckModel("example_model.ONNX");
 
 - **Tutorials**
     - [TMVA_SOFIE_Inference](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_Inference.py)
-    - [TMVA_SOFIE_Keras](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_Keras.C)
-    - [TMVA_SOFIE_Keras_HiggsModel](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_Keras_HiggsModel.C)
     - [TMVA_SOFIE_ONNX](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_ONNX.C)
-    - [TMVA_SOFIE_PyTorch](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_PyTorch.C)
+    - [TMVA_SOFIE_PyTorch_HiggsModel](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_PyTorch_HiggsModel.py)
     - [TMVA_SOFIE_RDataFrame](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_RDataFrame.C)
     - [TMVA_SOFIE_RDataFrame](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_RDataFrame.py)
     - [TMVA_SOFIE_RDataFrame_JIT](https://github.com/root-project/root/blob/master/tutorials/machine_learning/TMVA_SOFIE_RDataFrame_JIT.C)

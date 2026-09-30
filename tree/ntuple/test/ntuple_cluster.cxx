@@ -39,10 +39,15 @@ namespace {
 class RPageSourceMock : public RPageSource {
 protected:
    void LoadStructureImpl() final {}
-   RNTupleDescriptor AttachImpl(RNTupleSerializer::EDescriptorDeserializeMode) final { return RNTupleDescriptor(); }
+   RNTupleDescriptor AttachImpl() final { return RNTupleDescriptor(); }
    std::unique_ptr<RPageSource> CloneImpl() const final { return nullptr; }
-   RPageRef LoadPageImpl(ColumnHandle_t, const RClusterInfo &, ROOT::NTupleSize_t) final { return RPageRef(); }
-   void LoadStreamerInfo() final {}
+   void LoadPageListImpl(const ROOT::RNTupleLocator &, unsigned char *) final {}
+   void LoadSealedPageImpl(const ROOT::RNTupleLocator &, RSealedPage &) final {}
+   std::unique_ptr<ROOT::Internal::RPageSource>
+   OpenWithDifferentAnchor(const ROOT::Internal::RNTupleLink &, const ROOT::RNTupleReadOptions &) final
+   {
+      throw ROOT::RException(R__FAIL("method not implemented"));
+   }
 
 public:
    /// Records the cluster IDs requests by LoadClusters() calls
@@ -70,7 +75,6 @@ public:
       auto descriptorGuard = GetExclDescriptorGuard();
       descriptorGuard.MoveIn(descBuilder.MoveDescriptor());
    }
-   void LoadSealedPage(ROOT::DescriptorId_t, ROOT::RNTupleLocalIndex, RSealedPage &) final {}
    std::vector<std::unique_ptr<RCluster>> LoadClusters(std::span<RCluster::RKey> clusterKeys) final
    {
       std::vector<std::unique_ptr<RCluster>> result;
@@ -302,6 +306,38 @@ TEST(ClusterPool, GetClusterIncrementally)
    ASSERT_EQ(4U, p1.fReqsClusterIds.size());
    EXPECT_EQ(3U, p1.fReqsClusterIds[2]);
    EXPECT_EQ(RCluster::ColumnSet_t({1}), p1.fReqsColumns[2]);
+}
+
+TEST(ClusterPool, PinCluster)
+{
+   RPageSourceMock p1;
+   RClusterPool c1(p1, 1);
+   p1.PinCluster(3);
+   c1.GetCluster(3, {0});
+   c1.WaitForInFlightClusters();
+   ASSERT_EQ(2U, p1.fReqsClusterIds.size());
+   EXPECT_EQ(3U, p1.fReqsClusterIds[0]);
+   EXPECT_EQ(4U, p1.fReqsClusterIds[1]);
+
+   p1.PinCluster(0);
+   c1.GetCluster(0, {0});
+   c1.WaitForInFlightClusters();
+   ASSERT_EQ(4U, p1.fReqsClusterIds.size());
+   EXPECT_EQ(3U, p1.fReqsClusterIds[0]);
+   EXPECT_EQ(4U, p1.fReqsClusterIds[1]);
+   EXPECT_EQ(0U, p1.fReqsClusterIds[2]);
+   EXPECT_EQ(1U, p1.fReqsClusterIds[3]);
+
+   p1.UnpinCluster(0);
+   p1.PinCluster(1);
+   c1.GetCluster(1, {0});
+   c1.WaitForInFlightClusters();
+   ASSERT_EQ(5U, p1.fReqsClusterIds.size());
+   EXPECT_EQ(3U, p1.fReqsClusterIds[0]);
+   EXPECT_EQ(4U, p1.fReqsClusterIds[1]);
+   EXPECT_EQ(0U, p1.fReqsClusterIds[2]);
+   EXPECT_EQ(1U, p1.fReqsClusterIds[3]);
+   EXPECT_EQ(2U, p1.fReqsClusterIds[4]);
 }
 
 TEST(PageStorageFile, LoadClusters)

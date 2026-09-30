@@ -64,7 +64,7 @@ static struct ForbidDiagnostics {
          return;
       }
 
-      // FIXME: DOAS backend is exprimental.
+      // FIXME: DOAS backend is experimental.
       if (level == kWarning
           && strstr(msg, "The DAOS backend is experimental and still under development") != nullptr) {
         std::cerr << "Warning in " << location << " " << msg << std::endl;
@@ -79,7 +79,7 @@ static struct ForbidDiagnostics {
       }
 
       if (level == kWarning && strcmp(location, "RIoUring") == 0 &&
-          strstr(msg, "io_uring is unexpectedly not available because:") != nullptr) {
+          strstr(msg, "io_uring is not available because:") != nullptr) {
          std::cerr << "Warning in " << location << " " << msg << std::endl;
          return;
       }

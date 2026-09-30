@@ -1,9 +1,8 @@
-import py, pytest, os
+import pytest, os
 from pytest import mark, raises, skip
 from support import setup_make, pylong, IS_WINDOWS, ispypy
 
-currpath = os.getcwd()
-test_dct = currpath + "/libadvancedcppDict"
+test_dct = "advancedcpp_cxx"
 
 
 class TestADVANCEDCPP:
@@ -12,7 +11,6 @@ class TestADVANCEDCPP:
         import cppyy
         cls.advanced = cppyy.load_reflection_info(cls.test_dct)
 
-    @mark.xfail
     def test01_default_arguments(self):
         """Test usage of default arguments"""
 
@@ -156,7 +154,7 @@ class TestADVANCEDCPP:
         import cppyy
         gbl = cppyy.gbl
 
-        lib2 = cppyy.load_reflection_info("libadvancedcpp2Dict")
+        lib2 = cppyy.load_reflection_info("advancedcpp2_cxx")
 
         assert gbl.a_ns      is gbl.a_ns
         assert gbl.a_ns.d_ns is gbl.a_ns.d_ns
@@ -447,10 +445,10 @@ class TestADVANCEDCPP:
         #assert o == cppyy.bind_object(cobj, o.__class__)
         #assert o == cppyy.bind_object(cobj, "some_concrete_class")
         assert cppyy.addressof(o) == cppyy.addressof(cppyy.bind_object(addr, some_concrete_class))
-        assert o == cppyy.bind_object(addr, some_concrete_class)
-        assert o == cppyy.bind_object(addr, type(o))
-        assert o == cppyy.bind_object(addr, o.__class__)
-        assert o == cppyy.bind_object(addr, "some_concrete_class")
+        assert o is cppyy.bind_object(addr, some_concrete_class)
+        assert o is cppyy.bind_object(addr, type(o))
+        assert o is cppyy.bind_object(addr, o.__class__)
+        assert o is cppyy.bind_object(addr, "some_concrete_class")
         raises(TypeError, cppyy.bind_object, addr, "does_not_exist")
         raises(TypeError, cppyy.bind_object, addr, 1)
 
@@ -533,13 +531,13 @@ class TestADVANCEDCPP:
         b = base_class()
         d = derived_class()
 
-        assert b == b.cycle(b)
+        assert b is b.cycle(b)
         assert id(b) == id(b.cycle(b))
-        assert b == d.cycle(b)
+        assert b is d.cycle(b)
         assert id(b) == id(d.cycle(b))
-        assert d == b.cycle(d)
+        assert d is b.cycle(d)
         assert id(d) == id(b.cycle(d))
-        assert d == d.cycle(d)
+        assert d is d.cycle(d)
         assert id(d) == id(d.cycle(d))
 
         assert isinstance(b.cycle(b), base_class)
@@ -682,7 +680,7 @@ class TestADVANCEDCPP:
         assert cppyy.gbl.overload_one_way().gime() == 1
         assert cppyy.gbl.overload_the_other_way().gime() == "aap"
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test21_access_to_global_variables(self):
         """Access global_variables_and_pointers"""
 
@@ -716,6 +714,7 @@ class TestADVANCEDCPP:
         assert len(cppyy.gbl.gtestv1) == 1
         assert len(cppyy.gbl.gtestv2) == 1
 
+    @mark.xfail(run=False, condition=IS_WINDOWS, reason="Crashes with some versions of Visual Studio")
     def test22_exceptions(self):
         """Catching of C++ exceptions"""
 
@@ -771,7 +770,7 @@ class TestADVANCEDCPP:
         assert d2.vcheck()  == 'A'
         assert d2.vcheck(1) == 'B'
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test24_typedef_to_private_class(self):
         """Typedefs to private classes should not resolve"""
 
@@ -779,7 +778,7 @@ class TestADVANCEDCPP:
 
         assert cppyy.gbl.TypedefToPrivateClass().f().m_val == 42
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test25_ostream_printing(self):
         """Mapping of __str__ through operator<<(ostream&)"""
 
@@ -877,7 +876,7 @@ class TestADVANCEDCPP:
         #assert type(ns.A.Val(1)) == int
         #assert type(ns.B.Val(1)) == float
 
-    @mark.skip()
+    @mark.xfail(strict=True)
     def test28_extern_C_in_namespace(self):
         """Access to extern "C" declared functions in namespaces"""
 

@@ -62,7 +62,7 @@ ROOTTEST_ADD_AUTOMACROS(EXCLUDE runMemberComments runautoload
 
 ROOTTEST_ADD_TEST(runMemberComments
                   MACRO runMemberComments.C
-                  OUTREF MemberComments${ref_suffix})
+                  OUTREF MemberComments.ref)
 
 ROOTTEST_ADD_TEST(namespaceconflict
                   MACRO execnamespaceconflict.C+)
@@ -88,5 +88,10 @@ ROOTTEST_ADD_TEST(hello_ROOT_C
                   MACRO ${CMAKE_CURRENT_BINARY_DIR}/hello_ROOT_C.${libsuf}
                   OUTREF hello_ROOT_C_${libsuf}.ref
                   FIXTURES_REQUIRED root-meta-hello_ROOT-fixture)
+
+if(TARGET Gui)
+  ROOTTEST_ADD_TEST(optionList
+                    MACRO optionList.cxx)
+endif()
 
 ROOTTEST_ADD_TESTDIRS()

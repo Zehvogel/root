@@ -24,7 +24,7 @@ add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/include/RConfigure.h
 
 add_custom_target(rconfigure ALL DEPENDS ${CMAKE_BINARY_DIR}/include/RConfigure.h)
 
-ROOT_LINKER_LIBRARY(Core BUILTINS LZMA)
+ROOT_LINKER_LIBRARY(Core)
 
 # This sets RUNPATH for libCore, which enables it to dlopen any ROOT library in its directory.
 # If omitted, Core might try to load libraries from a ROOT that's installed in the system.
@@ -33,11 +33,6 @@ if(APPLE)
 elseif(NOT WIN32)
   set_property(TARGET Core APPEND PROPERTY BUILD_RPATH $ORIGIN)
 endif()
-
-generateHeader(Core
-  ${CMAKE_SOURCE_DIR}/core/base/src/root-argparse.py
-  ${CMAKE_BINARY_DIR}/ginclude/TApplicationCommandLineOptionsHelp.h
-)
 
 add_dependencies(Core CLING rconfigure)
 
@@ -81,6 +76,7 @@ add_subdirectory(rint)
 add_subdirectory(testsupport)
 add_subdirectory(textinput)
 add_subdirectory(thread)
+add_subdirectory(utils)
 add_subdirectory(zip)
 add_subdirectory(lzma)
 add_subdirectory(lz4)

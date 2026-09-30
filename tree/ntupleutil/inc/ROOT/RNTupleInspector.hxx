@@ -1,5 +1,4 @@
 /// \file ROOT/RNTupleInspector.hxx
-/// \ingroup NTuple ROOT7
 /// \author Florine de Geus <florine.de.geus@cern.ch>
 /// \date 2023-01-09
 /// \warning This is part of the ROOT 7 prototype! It will change without notice. It might trigger earthquakes. Feedback
@@ -49,6 +48,11 @@ enum class ENTupleInspectorHist {
    kNElems,
    kCompressedSize,
    kUncompressedSize
+};
+
+enum class ESchemaProfileFormat {
+   /// https://www.speedscope.app/file-format-schema.json
+   kSpeedscopeJSON
 };
 
 // clang-format off
@@ -494,6 +498,20 @@ public:
    {
       PrintFieldTreeAsDot(GetDescriptor().GetFieldZero(), output);
    }
+
+   /////////////////////////////////////////////////////////////////////////////
+   /// \brief Print a string that represents the tree of the (sub)fields and columns of an RNTuple in a format which a
+   /// performance profile visualizer can render
+   void PrintSchemaProfile(std::ostream &output = std::cout,
+                           ESchemaProfileFormat format = ESchemaProfileFormat::kSpeedscopeJSON) const;
+
+   ////////////////////////////////////////////////////////////////////////////
+   /// \brief Print a string that represents the on-disk storage of the cluster groups, clusters, column ranges, pages,
+   /// header, footer and page lists on an RNTuple in a format which a performance profile visualizer can render
+   ///
+   /// \warning ntuple must have a file-based backend
+   void PrintDiskProfile(std::ostream &output = std::cout,
+                         ESchemaProfileFormat format = ESchemaProfileFormat::kSpeedscopeJSON) const;
 };
 } // namespace Experimental
 } // namespace ROOT

@@ -588,7 +588,7 @@ TEST(RNTuple, StdMap)
 
    auto invalidInnerField = RFieldBase::Create("someIntField", "int").Unwrap();
    EXPECT_THROW(
-      std::make_unique<ROOT::RMapField>("myInvalidMap", ROOT::RMapField::EMapType::kMap, std::move(invalidInnerField)),
+      std::ignore = std::make_unique<ROOT::RMapField>("myInvalidMap", ROOT::RMapField::EMapType::kMap, std::move(invalidInnerField)),
       ROOT::RException);
 
    FileRaii fileGuard("test_ntuple_rfield_stdmap.root");
@@ -1814,6 +1814,29 @@ TEST(RNTuple, Double32)
    EXPECT_DOUBLE_EQ(std::numeric_limits<float>::denorm_min(), *d2Float);
 }
 
+TEST(RNTuple, Double32Uncompressed)
+{
+   FileRaii fileGuard("test_ntuple_double32_uncompressed.root");
+
+   auto model = RNTupleModel::Create();
+   model->AddField(RFieldBase::Create("d", "Double32_t").Unwrap());
+
+   auto options = RNTupleWriteOptions();
+   options.SetCompression(0);
+   {
+      auto writer = RNTupleWriter::Recreate(std::move(model), "ntuple", fileGuard.GetPath(), options);
+      auto d = writer->GetModel().GetDefaultEntry().GetPtr<double>("d");
+      *d = 1.25;
+      writer->Fill();
+   }
+
+   auto reader = RNTupleReader::Open("ntuple", fileGuard.GetPath());
+   EXPECT_EQ(ROOT::ENTupleColumnType::kReal32, reader->GetModel().GetConstField("d").GetColumnRepresentatives()[0][0]);
+   EXPECT_EQ("Double32_t", reader->GetModel().GetConstField("d").GetTypeAlias());
+   reader->LoadEntry(0);
+   EXPECT_DOUBLE_EQ(1.25, *reader->GetModel().GetDefaultEntry().GetPtr<double>("d"));
+}
+
 TEST(RNTuple, Double32Extended)
 {
    FileRaii fileGuard("test_ntuple_double32_extended.root");
@@ -2250,9 +2273,15 @@ TEST(RNTuple, ContextDependentTypes)
       auto ptr = std::make_unique<DerivedWithTypedef>();
       entry->BindRawPtr("foo", ptr.get());
       for (auto i = 0; i < 10; ++i) {
-         ptr->m.push_back(i);
+         ptr->m1.push_back(i);
+         ptr->m2.push_back(i);
+         ptr->m3.push_back(i);
+         ptr->m4.fVec.push_back(i);
          ntuple->Fill(*entry);
-         ptr->m.clear();
+         ptr->m1.clear();
+         ptr->m2.clear();
+         ptr->m3.clear();
+         ptr->m4.fVec.clear();
       }
    }
 
@@ -2263,13 +2292,16 @@ TEST(RNTuple, ContextDependentTypes)
       const auto &model = reader->GetModel();
       const auto &field = model.GetConstField("foo");
       EXPECT_EQ(field.GetTypeName(), "DerivedWithTypedef");
-      const auto &vec = model.GetConstField("foo.m");
-      EXPECT_EQ(vec.GetTypeName(), "std::vector<std::int32_t>");
-      EXPECT_EQ(vec.GetTypeAlias(), "MyVec<std::int32_t>");
 
-      auto vecView = reader->GetView<DerivedWithTypedef::MyVec<int>>("foo.m");
+      auto m1View = reader->GetView<DerivedWithTypedef::MyVec<Double32_t>>("foo.m1");
+      auto m2View = reader->GetView<DerivedWithTypedef::MyVec<Long64_t>>("foo.m2");
+      auto m3View = reader->GetView<DerivedWithTypedef::MyVec<Int_t>>("foo.m3");
+      auto m4View = reader->GetView<DerivedWithTypedef::MyVectorWrapper<Long64_t>>("foo.m4");
       for (const auto &i : reader->GetEntryRange()) {
-         EXPECT_EQ(vecView(i), std::vector{static_cast<int>(i)});
+         EXPECT_DOUBLE_EQ(m1View(i)[0], std::vector<double>{static_cast<double>(i)}[0]);
+         EXPECT_EQ(m2View(i), std::vector<Long64_t>{static_cast<Long64_t>(i)});
+         EXPECT_EQ(m3View(i), std::vector<int>{static_cast<int>(i)});
+         EXPECT_EQ(m4View(i).fVec, std::vector<Long64_t>{static_cast<Long64_t>(i)});
       }
    }
 }

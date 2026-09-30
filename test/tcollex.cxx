@@ -1,9 +1,6 @@
 // @(#)root/test:$Id$
 // Author: Fons Rademakers   19/08/96
 
-#include <cstdlib>
-
-#include "Riostream.h"
 #include "TString.h"
 #include "TObjString.h"
 #include "TSortedList.h"
@@ -13,6 +10,7 @@
 #include "TBtree.h"
 #include "TStopwatch.h"
 
+#include <cstdlib>
 
 // To focus on basic collection protocol, this sample program uses
 // simple classes inheriting from TObject. One class, TObjString, is a
@@ -390,7 +388,7 @@ int tcollex() {
    return 0;
 }
 
-#ifndef __CINT__
+#ifndef __CLING__
 int main() {
    return tcollex();
 }

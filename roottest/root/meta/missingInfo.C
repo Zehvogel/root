@@ -1,13 +1,14 @@
 class TopLevel { public: virtual ~TopLevel() {} };
 class BottomOne : public TopLevel {};
-#ifndef __CINT__
+#ifndef __CLING__
 #ifndef __CLING__
 class BottomMissing : public TopLevel {};
 #endif
 #endif
 
-#include "Riostream.h"
 #include "TClass.h"
+
+#include <iostream>
 
 #ifdef __CLING__
 void missingInfo();

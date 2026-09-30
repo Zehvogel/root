@@ -1,6 +1,6 @@
 #include "ClassDefinitions.C"
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class QRawPulseR+;
 #pragma link C++ class QRawTriggerPulseR+;
 #pragma link C++ class QRawEventR+;
@@ -10,10 +10,11 @@
 #include "TTree.h"
 #include "TFile.h"
 #include "TTreeFormula.h"
-#include "Riostream.h"
 #include "TMath.h"
 #include "TRandom.h"
 #include "TStopwatch.h"
+
+#include <iostream>
 
 void createtree() {		
 	TH1::AddDirectory(kFALSE);

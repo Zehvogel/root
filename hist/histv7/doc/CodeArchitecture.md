@@ -50,6 +50,10 @@ It also keeps statistics of the unbinned values for each dimension.
 This class combines `RHistEngine`, with its axes and bin contents, and `RHistStats`.
 During `Fill`, it delegates to `RHistEngine::Fill` but also updates the histogram statistics.
 
+### `RProfile`
+
+This class builds on `RHistEngine`, but requires an additional value during `Fill`.
+
 ## Classes for Weighted Filling
 
 ### `RBinWithError`
@@ -61,6 +65,17 @@ It can be used as a template argument to `RHistEngine` and `RHist`.
 
 A wrapper `struct` for a single `double` value, used for weighted filling to distinguish its type.
 Objects of this type are passed by value.
+
+## Classes for Concurrent Filling
+
+### `RHistConcurrentFiller`
+
+A class to orchestrate concurrent filling of `RHist` by creating (multiple) fill contexts.
+
+### `RHistFillContext`
+
+Parallel user code uses contexts to fill `RHist`s concurrently.
+Each instance has a local `RHistStats` object to avoid contention on the global histogram statistics.
 
 ## Auxiliary Classes
 
@@ -74,3 +89,15 @@ Objects of this type are passed by value; most notably to `GetBinContent` and `S
 
 A range of `RBinIndex` from `begin` (inclusive) to `end` (exclusive).
 The class exposes an iterator interface that can be used in range-based loops.
+
+### `RBinIndexMultiDimRange`
+
+A multidimensional composition of `RBinIndexRange`.
+The class exposes an iterator interface that can be used in range-based loops.
+The value type is a `std::vector<RBinIndex>`.
+
+### `RHistAutoAxisFiller`
+
+A specialized class to automatically determine the axis interval during filling.
+It constructs a regular axis based on the minimum and maximum values of the initial entries.
+The implementation is currently restricted to one dimension and sequential filling.

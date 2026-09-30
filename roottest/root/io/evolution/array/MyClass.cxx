@@ -3,10 +3,9 @@
 #endif
 
 #include "MyClass.h"
-#include <cstdlib>
-#include <Riostream.h>
 #include <TObject.h>
 
+#include <cstdlib>
 
 #if MYCLASS == 1
 // old version, classdef = 1
@@ -84,6 +83,6 @@ void MyClass::SetArray(Int_t* array){
 }
 #endif
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class MyClass+;
 #endif

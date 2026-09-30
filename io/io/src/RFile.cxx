@@ -1,5 +1,4 @@
 /// \file v7/src/RFile.cxx
-/// \ingroup Base ROOT7
 /// \author Giacomo Parolini <giacomo.parolini@cern.ch>
 /// \date 2025-03-19
 /// \warning This is part of the ROOT 7 prototype! It will change without notice. It might trigger earthquakes. Feedback
@@ -8,6 +7,7 @@
 #include "ROOT/RFile.hxx"
 
 #include <ROOT/StringUtils.hxx>
+#include <ROOT/RLogger.hxx>
 #include <ROOT/RError.hxx>
 
 #include <Byteswap.h>
@@ -221,10 +221,11 @@ std::unique_ptr<RFile> RFile::Update(std::string_view path)
    return rfile;
 }
 
-std::unique_ptr<RFile> RFile::Recreate(std::string_view path)
+std::unique_ptr<RFile> RFile::Recreate(std::string_view path, const RRecreateOptions &opts)
 {
    TDirectory::TContext ctx(nullptr); // XXX: probably not thread safe?
-   auto tfile = std::unique_ptr<TFile>(TFile::Open(std::string(path).c_str(), "RECREATE_WITHOUT_GLOBALREGISTRATION"));
+   auto tfile = std::unique_ptr<TFile>(
+      TFile::Open(std::string(path).c_str(), "RECREATE_WITHOUT_GLOBALREGISTRATION", "", opts.fCompressionSettings));
    EnsureFileOpenAndBinary(tfile.get(), path);
 
    auto rfile = std::unique_ptr<RFile>(new RFile(std::move(tfile)));
@@ -304,9 +305,18 @@ void *RFile::GetUntyped(std::string_view path,
    void *obj = key ? key->ReadObjectAny(cls) : nullptr;
 
    if (obj) {
-      // Disavow any ownership on `obj`
-      if (auto autoAddFunc = cls->GetDirectoryAutoAdd(); autoAddFunc) {
-         autoAddFunc(obj, nullptr);
+      // Disavow any ownership on `obj` unless the object is a TTree, in which case we need to link it to our internal
+      // file for it to be usable.
+      if (auto autoAddFunc = cls->GetDirectoryAutoAdd()) {
+         if (cls->InheritsFrom("TTree")) {
+            autoAddFunc(obj, fFile.get());
+            // NOTE(gparolini): this is a hacky but effective way of preventing the Tree from being deleted by
+            // the internal TFile once we close it. We need to avoid that because this TTree will be returned inside
+            // a unique_ptr and would end up being double-freed if we allowed ROOT to do its own memory management.
+            ROOT::Internal::MarkTObjectAsNotOnHeap(*static_cast<TObject *>(obj));
+         } else {
+            autoAddFunc(obj, nullptr);
+         }
       }
    } else if (key) {
       R__LOG_INFO(RFileLog()) << "Tried to get object '" << path << "' of type " << cls->GetName()
@@ -465,6 +475,10 @@ void ROOT::Experimental::RFileKeyIterable::RIterator::Advance()
       assert(!fIterStack.empty());
       const std::size_t nesting = fIterStack.size() - 1;
 
+      // Skip key if it's the root dir itself
+      if (isDir && fullPath == fPattern)
+         continue;
+
       // Skip key if it's not a child of root dir
       if (!ROOT::StartsWith(fullPath, fPattern))
          continue;
@@ -531,18 +545,26 @@ void RFile::Close()
    fFile.reset();
 }
 
+ROOT::Experimental::RKeyInfo::RKeyInfo(const TKey &key)
+   : fPath(ReconstructFullKeyPath(key)),
+     fTitle(key.GetTitle()),
+     fClassName(key.GetClassName()),
+     fCycle(key.GetCycle()),
+     fLenObj(key.GetObjlen()),
+     fNBytesObj(key.GetNbytes() - key.GetKeylen()),
+     fNBytesKey(key.GetKeylen()),
+     fSeekKey(key.GetSeekKey()),
+     fSeekParentDir(key.GetSeekPdir())
+{
+}
+
 std::optional<ROOT::Experimental::RKeyInfo> RFile::GetKeyInfo(std::string_view path) const
 {
    const TKey *key = GetTKey(path);
    if (!key)
       return {};
 
-   RKeyInfo keyInfo;
-   keyInfo.fPath = ReconstructFullKeyPath(*key);
-   keyInfo.fClassName = key->GetClassName();
-   keyInfo.fCycle = key->GetCycle();
-   keyInfo.fTitle = key->GetTitle();
-
+   RKeyInfo keyInfo(*key);
    return keyInfo;
 }
 
@@ -551,3 +573,10 @@ void *ROOT::Experimental::Internal::RFile_GetObjectFromKey(RFile &file, const RK
    void *obj = file.GetUntyped(key.GetPath(), key.GetClassName().c_str());
    return obj;
 }
+
+TFile *ROOT::Experimental::Internal::GetRFileTFile(RFile &file)
+{
+   return file.fFile.get();
+}
+
+RFile::RRecreateOptions::RRecreateOptions() = default;

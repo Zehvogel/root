@@ -151,6 +151,7 @@
 #include <ROOT/TIOFeatures.hxx>
 
 #include "haddCommandLineOptionsHelp.h"
+#include "logging.hxx"
 
 #include <climits>
 #include <cstdlib>
@@ -168,56 +169,13 @@
 
 ////////////////////////////////////////////////////////////////////////////////
 
-// NOTE: TFileMerger will use PrintLevel = gHaddVerbosity - 1. If PrintLevel is < 1, it will print nothing, otherwise
+// NOTE: TFileMerger will use PrintLevel = GetLogVerbosity() - 1. If PrintLevel is < 1, it will print nothing, otherwise
 // it will print everything. To give some granularity to hadd, we do the following:
-// gHaddVerbosity = 0: only print hadd errors
-// gHaddVerbosity = 1: only print hadd errors + warnings
-// gHaddVerbosity = 2: print hadd errors + warnings and TFileMerger messages
-// gHaddVerbosity > 2: print all hadd and TFileMerger messages.
+// LogVerbosity = 0: only print hadd errors
+// LogVerbosity = 1: only print hadd errors + warnings
+// LogVerbosity = 2: print hadd errors + warnings and TFileMerger messages
+// LogVerbosity > 2: print all hadd and TFileMerger messages.
 static constexpr int kDefaultHaddVerbosity = 2;
-static int gHaddVerbosity = kDefaultHaddVerbosity;
-
-namespace {
-
-class NullBuf : public std::streambuf {
-public:
-   int overflow(int c) final { return c; }
-};
-
-class NullStream : public std::ostream {
-   NullBuf fBuf;
-
-public:
-   NullStream() : std::ostream(&fBuf) {}
-};
-
-} // namespace
-
-static NullStream &GetNullStream()
-{
-   static NullStream nullStream;
-   return nullStream;
-}
-
-static inline std::ostream &Err()
-{
-   std::cerr << "Error in <hadd>: ";
-   return std::cerr;
-}
-
-static inline std::ostream &Warn()
-{
-   std::ostream &s = gHaddVerbosity < 1 ? GetNullStream() : std::cerr;
-   s << "Warning in <hadd>: ";
-   return s;
-}
-
-static inline std::ostream &Info(int minLevel)
-{
-   std::ostream &s = gHaddVerbosity < minLevel ? GetNullStream() : std::cerr;
-   s << "Info in <hadd>: ";
-   return s;
-}
 
 using IntFlag_t = uint32_t;
 
@@ -656,8 +614,24 @@ static Int_t ParseFilterFile(const std::optional<std::string> &filterFileName,
    return 0;
 }
 
+static bool FilesAreEquivalent(std::string_view source, std::string_view target)
+{
+   const bool sourceHasProtocol = source.find_first_of("://") == std::string_view::npos;
+   const bool targetHasProtocol = target.find_first_of("://") == std::string_view::npos;
+   if (sourceHasProtocol != targetHasProtocol)
+      return false;
+
+   // We cannot use std::filesystem functions for file paths that have a protocol.
+   if (!sourceHasProtocol)
+      return source == target;
+
+   return std::filesystem::exists(target) && std::filesystem::equivalent(source, target);
+}
+
 int main(int argc, char **argv)
 {
+   InitLog("hadd", kDefaultHaddVerbosity);
+
    const auto argsOpt = ParseArgs(argc, argv);
    if (!argsOpt)
       return 1;
@@ -670,7 +644,7 @@ int main(int argc, char **argv)
 
    ROOT::TIOFeatures features = args.fFeatures.value_or(ROOT::TIOFeatures{});
    Int_t maxopenedfiles = args.fMaxOpenedFiles.value_or(0);
-   gHaddVerbosity = args.fVerbosity.value_or(kDefaultHaddVerbosity);
+   SetLogVerbosity(args.fVerbosity.value_or(kDefaultHaddVerbosity));
    Int_t newcomp = args.fCompressionSettings.value_or(-1);
    TString cacheSize = args.fCacheSize.value_or("");
 
@@ -731,7 +705,7 @@ int main(int argc, char **argv)
 
    TFileMerger fileMerger(kFALSE, kFALSE);
    fileMerger.SetMsgPrefix("hadd");
-   fileMerger.SetPrintLevel(gHaddVerbosity - 1);
+   fileMerger.SetPrintLevel(GetLogVerbosity() - 1);
    if (maxopenedfiles > 0) {
       fileMerger.SetMaxOpenedFiles(maxopenedfiles);
    }
@@ -758,7 +732,7 @@ int main(int argc, char **argv)
                            << (argv[a] + 1) << std::endl;
                      if (!args.fSkipErrors)
                         return 1;
-                  } else if (std::filesystem::exists(targetname) && std::filesystem::equivalent(line, targetname)) {
+                  } else if (FilesAreEquivalent(line, targetname)) {
                      Err() << "file " << line << " cannot be both the target and an input!\n";
                      if (!args.fSkipErrors)
                         return 1;
@@ -769,12 +743,12 @@ int main(int argc, char **argv)
             }
          }
       } else {
-         const std::string line = argv[a];
-         if (gSystem->AccessPathName(line.c_str(), kReadPermission) == kTRUE) {
+         const char *line = argv[a];
+         if (gSystem->AccessPathName(line, kReadPermission) == kTRUE) {
             Err() << "could not validate argument \"" << line << "\" as input file " << std::endl;
             if (!args.fSkipErrors)
                return 1;
-         } else if (std::filesystem::exists(targetname) && std::filesystem::equivalent(line, targetname)) {
+         } else if (FilesAreEquivalent(line, targetname)) {
             Err() << "file " << line << " cannot be both the target and an input!\n";
             if (!args.fSkipErrors)
                return 1;
@@ -896,7 +870,7 @@ int main(int argc, char **argv)
    auto parallelMerge = [&](int start) {
       TFileMerger mergerP(kFALSE, kFALSE);
       mergerP.SetMsgPrefix("hadd");
-      mergerP.SetPrintLevel(gHaddVerbosity - 1);
+      mergerP.SetPrintLevel(GetLogVerbosity() - 1);
       if (maxopenedfiles > 0) {
          mergerP.SetMaxOpenedFiles(maxopenedfiles / nProcesses);
       }

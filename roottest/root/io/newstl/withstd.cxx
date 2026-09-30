@@ -1,11 +1,12 @@
 #include "TFile.h"
 #include "TROOT.h"
+
 #include <string>
-#include "Riostream.h"
+#include <iostream>
 
 template <class T> class something {};
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class something<std::string>;
 #endif
 

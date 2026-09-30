@@ -257,6 +257,7 @@ TGeoCompositeShape::TGeoCompositeShape(const char *expression) : TGeoBBox(0, 0, 
 
 TGeoCompositeShape::TGeoCompositeShape(const char *name, TGeoBoolNode *node) : TGeoBBox(0, 0, 0)
 {
+   SetShapeBit(TGeoShape::kGeoComb);
    SetName(name);
    fNode = node;
    if (!fNode) {
@@ -379,6 +380,15 @@ void TGeoCompositeShape::GetMeshNumbers(Int_t &nvert, Int_t &nsegs, Int_t &npols
    nvert = GetNmeshVertices();
    nsegs = 0;
    npols = 0;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Invalidate mesh caching done by TGeoBoolNode
+
+void TGeoCompositeShape::InvalidateMeshCaches()
+{
+   if (fNode)
+      fNode->InvalidateMeshCaches();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

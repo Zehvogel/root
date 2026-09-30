@@ -5,6 +5,18 @@
 # For the list of contributors see $ROOTSYS/README/CREDITS.
 
 cmake_minimum_required(VERSION 3.20 FATAL_ERROR)
+if("${CMAKE_VERSION}" VERSION_LESS "3.26.0")
+  message(WARNING
+    "Your CMake version is ${CMAKE_VERSION}. Starting with ROOT 6.44, the "
+    "minimum version of CMake required to build ROOT will become 3.26.0, and "
+    "using an older CMake will raise an error. After ROOT 6.44, the CMake version "
+    "may rise to 3.31.0 if an upgrade to LLVM 24 or later is performed.")
+elseif("${CMAKE_VERSION}" VERSION_LESS "3.31.0")
+  message(STATUS
+    "Your CMake version is ${CMAKE_VERSION}. After ROOT 6.44, the "
+    "minimum version of CMake required to build ROOT may become 3.31.0 if "
+    "an upgrade to LLVM 24 or later is performed.")
+endif()
 
 if(WIN32)
   # Set CMP0091 (MSVC runtime library flags are selected by an abstraction) to OLD
@@ -12,31 +24,10 @@ if(WIN32)
   cmake_policy(SET CMP0091 OLD)
   set(CMAKE_SKIP_TEST_ALL_DEPENDENCY TRUE)
 endif()
-if(CMAKE_HOST_APPLE AND (NOT CMAKE_OSX_SYSROOT OR CMAKE_OSX_SYSROOT STREQUAL ""))
-  # The SYSROOT *must* be set before the project() call
-  # TODO: The following code is *necessary* on a standard MacOS platform (e.g. an Apple MacOS machine), but may not
-  # be as necessary on other MacOS platforms (e.g. Nix). A PR removed the following code https://github.com/root-project/root/pull/19718
-  # and the CI was happy with it, but unfortunately it was working simply because during our CI run jobs something is
-  # setting the SDKROOT environment variable, which implicitly sets the CMAKE_OSX_SYSROOT variable. This was highlighted
-  # by another PR https://github.com/root-project/root/pull/19855. On a standard Apple MacOS system, where the SDKROOT
-  # variable is not set by default, the build of ROOT would fail without the following code. It is unclear what is setting
-  # the SDKROOT variable only during our CI jobs, logging to the same CI machines and launching a build manually shows
-  # the same build error.
-  find_program(XCRUN_EXECUTABLE xcrun)
-  if(EXISTS ${XCRUN_EXECUTABLE})
-    execute_process(COMMAND ${XCRUN_EXECUTABLE} --sdk macosx --show-sdk-path
-      OUTPUT_VARIABLE SDK_PATH
-      ERROR_QUIET
-      OUTPUT_STRIP_TRAILING_WHITESPACE)
-    if(NOT EXISTS "${SDK_PATH}")
-      message(FATAL_ERROR "Could not detect macOS SDK path")
-    endif()
 
-    set(CMAKE_OSX_SYSROOT "${SDK_PATH}" CACHE PATH "SDK path" FORCE)
-  else()
-    message(WARNING "The CMAKE_OSX_SYSROOT variable is not set and the 'xcrun' executable is not available. "
-                    "This build of ROOT might not be able to find the correct MacOS SDK.")
-  endif()
+if(CMAKE_HOST_APPLE)
+  # Don't move this because the SDK needs to be set before "project(ROOT)"
+  include(cmake/modules/SetOSX_SDK.cmake)
 endif()
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR AND NOT ALLOW_IN_SOURCE)
@@ -53,18 +44,15 @@ foreach(directoryName IN ITEMS ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR} ${CMAKE_I
 endforeach()
 
 set(policy_new CMP0072 CMP0076 CMP0077 CMP0079
+    CMP0116 # Ninja generators transform DEPFILEs from add_custom_command()
+    CMP0135 # Timestamps of downloaded archives are set to time of extraction
+    CMP0144 # <PACKAGENAME>_ROOT (converted to upper case) can be used to search for dependencies
     CMP0156 CMP0179 #deduplicate static libraries when linker supports it
+    CMP0218 # no special handling for `CMAKE_WARN_DEPRECATED` and `CMAKE_ERROR_DEPRECATED` variables
 )
 foreach(policy ${policy_new})
   if(POLICY ${policy})
     cmake_policy(SET ${policy} NEW)
-  endif()
-endforeach()
-
-set(policy_old CMP0116 CMP0135 CMP0144)
-foreach(policy ${policy_old})
-  if(POLICY ${policy})
-    cmake_policy(SET ${policy} OLD)
   endif()
 endforeach()
 
@@ -261,8 +249,6 @@ if(ccache)
   if(EXISTS ${CCACHE_COMMAND})
     message(STATUS "Found ccache: ${CCACHE_COMMAND}")
     set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ${CCACHE_COMMAND})
-    execute_process(COMMAND ${CCACHE_COMMAND} "-V" OUTPUT_VARIABLE CCACHE_VERSION)
-    string(REGEX REPLACE "ccache version ([0-9\\.]+).*" "\\1" CCACHE_VERSION ${CCACHE_VERSION})
   else()
     message(STATUS "Could NOT find ccache")
     set(ccache OFF CACHE BOOL "Use ccache (disabled since ccache was not found)" FORCE)
@@ -318,10 +304,8 @@ if(asan)
     set(ASAN_EXTRA_LD_PRELOAD "${CMAKE_BINARY_DIR}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}ROOTSanitizerConfig${CMAKE_SHARED_LIBRARY_SUFFIX}:${ASAN_RUNTIME_LIBRARY}")
   endif()
 
-  foreach(item IN LISTS ASAN_EXTRA_CXX_FLAGS)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:${item}>)
-  endforeach()
-  #add_link_options() not available in our CMake version:
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ASAN_EXTRA_CXX_FLAGS}")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ASAN_EXTRA_CXX_FLAGS}")
   set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${ASAN_EXTRA_SHARED_LINKER_FLAGS}")
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${ASAN_EXTRA_EXE_LINKER_FLAGS}")
 endif()
@@ -379,9 +363,6 @@ file(GLOB_RECURSE artifact_files RELATIVE ${CMAKE_SOURCE_DIR} etc/*)
 # Exclude the *.in files, just like in the install tree
 list(FILTER artifact_files EXCLUDE REGEX "\.(in)$")
 
-# Exclude etc/notebook/JsMVA
-list(FILTER artifact_files EXCLUDE REGEX "^etc/notebook/JsMVA/")
-
 foreach(artifact_file ${artifact_files})
   add_custom_command(OUTPUT ${CMAKE_BINARY_DIR}/${artifact_file}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_SOURCE_DIR}/${artifact_file} ${CMAKE_BINARY_DIR}/${artifact_file}
@@ -419,15 +400,35 @@ install(FILES ${CMAKE_BINARY_DIR}/etc/gitinfo.txt DESTINATION ${CMAKE_INSTALL_SY
 #---Recurse into the given subdirectories.  This does not actually cause another cmake executable
 #  to run. The same process will walk through the project's entire directory structure.
 add_subdirectory (core)
+add_subdirectory (builtins/zip) # hard coded builtin for core/zip
+add_subdirectory (builtins/mixmax) # hard coded builtin for math/mathcore
 add_subdirectory (math)
+if (fortran AND CMAKE_Fortran_COMPILER)
+  add_subdirectory(builtins/cernlib) # hard coded builtin for hist and main
+endif()
 add_subdirectory (hist)
 add_subdirectory (tree)
 add_subdirectory (io)
 add_subdirectory (net)
+if (x11)
+  add_subdirectory (builtins/xvertext) # hard coded builtin for graf2d/x11
+endif()
 add_subdirectory (graf2d)
+if (opengl)
+  add_subdirectory (builtins/glad) # hard coded builtin for graf3d
+endif()
+add_subdirectory (builtins/x3d) # hard coded builtin for graf3d
+add_subdirectory (builtins/csg) # hard coded builtin for graf3d
 add_subdirectory (graf3d)
 if(NOT minimal)
   add_subdirectory (gui)
+else()
+  if(asimage)
+    message(SEND_ERROR "minimal=ON is not compatible with asimage=ON. Consider setting instead gminimal=ON")
+  endif()
+  if(x11)
+    message(SEND_ERROR "minimal=ON is not compatible with x11=ON. Consider setting instead gminimal=ON")
+  endif()
 endif()
 add_subdirectory (montecarlo)
 if(geom)
@@ -542,7 +543,6 @@ install(
    PATTERN "*.pcm"
    PATTERN "modules.idx"
    PATTERN "JupyROOT" EXCLUDE
-   PATTERN "JsMVA" EXCLUDE
    PATTERN "python*" EXCLUDE
    PATTERN "cmake" EXCLUDE
    PATTERN "pkgconfig" EXCLUDE
@@ -556,8 +556,7 @@ if(runtime_cxxmodules)
     set(modules_idx_cmd COMMAND ${CMAKE_COMMAND} -E env PATH="${library_output_dir}\\\;%PATH%"
                                 ROOTIGNOREPREFIX=1 ROOT_HIST=0 $<TARGET_FILE:root.exe> -l -q -b)
   else()
-    set(modules_idx_cmd COMMAND ${ld_library_path}=${library_output_dir}:$ENV{${ld_library_path}}
-                                ROOT_INCLUDE_PATH=${DEFAULT_ROOT_INCLUDE_PATH}
+    set(modules_idx_cmd COMMAND ROOT_INCLUDE_PATH=${DEFAULT_ROOT_INCLUDE_PATH}
                                 ROOTIGNOREPREFIX=1 ROOT_HIST=0 $<TARGET_FILE:root.exe> -l -q -b)
   endif()
   add_custom_command(OUTPUT ${library_output_dir}/modules.idx
@@ -575,21 +574,25 @@ endif()
 ROOT_ADD_TEST_SUBDIRECTORY(tutorials)
 
 #---hsimple.root---------(use the executable for clearer dependencies and proper return code)---
-add_custom_target(hsimple ALL DEPENDS tutorials/hsimple.root)
-add_dependencies(hsimple onepcm)
-if(WIN32)
-  set(hsimple_cmd COMMAND ${CMAKE_COMMAND} -E env PATH="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}\\\;%PATH%"
-                          ROOT_INCLUDE_PATH=${DEFAULT_ROOT_INCLUDE_PATH}
-                          ROOTIGNOREPREFIX=1 ROOT_HIST=0 $<TARGET_FILE:root.exe> -l -q -b -n -x ${CMAKE_SOURCE_DIR}/tutorials/hsimple.C -e return)
-else()
-  set(hsimple_cmd COMMAND ROOT_INCLUDE_PATH=${DEFAULT_ROOT_INCLUDE_PATH} ${ld_library_path}=${CMAKE_LIBRARY_OUTPUT_DIRECTORY}:$ENV{${ld_library_path}}
-                          ROOTIGNOREPREFIX=1 ROOT_HIST=0 $<TARGET_FILE:root.exe> -l -q -b -n -x ${CMAKE_SOURCE_DIR}/tutorials/hsimple.C -e return)
+# We can't build hsimple when cross compiling
+if(NOT CMAKE_CROSSCOMPILING)
+  add_custom_target(hsimple ALL DEPENDS tutorials/hsimple.root)
+  add_dependencies(hsimple onepcm)
+  add_custom_command(OUTPUT tutorials/hsimple.root
+                    VERBATIM
+                    COMMAND
+                      ${CMAKE_COMMAND} -E env
+                      ROOT_INCLUDE_PATH=${DEFAULT_ROOT_INCLUDE_PATH}
+                      ROOTIGNOREPREFIX=1
+                      ROOT_HIST=0
+                      $<TARGET_FILE:root.exe> -q -b -n
+                        -e ".L ${CMAKE_SOURCE_DIR}/tutorials/hsimple.C"
+                        -e "hsimple();"
+                        -e return
+                    WORKING_DIRECTORY tutorials
+                    DEPENDS $<TARGET_FILE:root.exe> Cling Hist Tree Gpad Graf HistPainter move_artifacts)
+  install(FILES ${CMAKE_BINARY_DIR}/tutorials/hsimple.root DESTINATION ${CMAKE_INSTALL_TUTDIR} COMPONENT tests)
 endif()
-add_custom_command(OUTPUT tutorials/hsimple.root
-                   ${hsimple_cmd}
-                   WORKING_DIRECTORY tutorials
-                   DEPENDS $<TARGET_FILE:root.exe> Cling Hist Tree Gpad Graf HistPainter move_artifacts)
-install(FILES ${CMAKE_BINARY_DIR}/tutorials/hsimple.root DESTINATION ${CMAKE_INSTALL_TUTDIR} COMPONENT tests)
 
 if(runtime_cxxmodules)
   add_dependencies(hsimple modules_idx)
@@ -615,7 +618,7 @@ add_custom_target(dist COMMAND cpack --config CPackConfig.cmake)
 get_cmake_property(variables CACHE_VARIABLES)
 foreach(var ${variables})
   if((var MATCHES "_(LIBRARIES|LIBRARY|INCLUDE|VERSION)") AND
-     (NOT ${${var}} STREQUAL "") AND
+     (NOT "${${var}}" STREQUAL "") AND
      (NOT ${var} MATCHES "NOTFOUND"))
     if (var MATCHES "^QT_")
       # filter out the very long list of Qt libraries and include dirs
@@ -646,10 +649,7 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_INSTALL_PREFIX)
   endif()
   install(DIRECTORY etc/ DESTINATION ${CMAKE_INSTALL_SYSCONFDIR} USE_SOURCE_PERMISSIONS
                          ${DIR_PERMISSIONS}
-                         PATTERN "notebook/JsMVA" EXCLUDE
                          PATTERN "system.rootrc" EXCLUDE
-                         PATTERN "system.rootauthrc" EXCLUDE
-                         PATTERN "system.rootdaemonrc" EXCLUDE
                          PATTERN "root.mimes" EXCLUDE
                          PATTERN "*.in" EXCLUDE)
   install(DIRECTORY fonts/  DESTINATION ${CMAKE_INSTALL_FONTDIR} ${DIR_PERMISSIONS})
@@ -657,6 +657,9 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_INSTALL_PREFIX)
   install(DIRECTORY macros/ DESTINATION ${CMAKE_INSTALL_MACRODIR} ${DIR_PERMISSIONS})
   if(http)
      install(DIRECTORY js/     DESTINATION ${CMAKE_INSTALL_JSROOTDIR} ${DIR_PERMISSIONS})
+  endif()
+  if(cefweb AND TARGET ROOTCefDisplay)
+     install(DIRECTORY ${CMAKE_BINARY_DIR}/Frameworks/   DESTINATION ${CMAKE_INSTALL_FRAMEWORKSDIR} ${DIR_PERMISSIONS})
   endif()
   if(webgui)
      install(DIRECTORY ui5/    DESTINATION ${CMAKE_INSTALL_OPENUI5DIR} ${DIR_PERMISSIONS})
@@ -672,9 +675,6 @@ if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_INSTALL_PREFIX)
     cmake/modules/RootMacros.cmake
     cmake/modules/RootTestDriver.cmake
     DESTINATION ${CMAKE_INSTALL_CMAKEDIR})
-  install(FILES
-    "cmake/modules/FindVdt.cmake"
-    DESTINATION "${CMAKE_INSTALL_CMAKEDIR}/modules")
 endif()
 
 #---Add configuration files for kernel and jupyter----------------------------------------------
@@ -699,6 +699,9 @@ endif()
 if(pyroot)
   set(PYTESTS_WILLFAIL WILLFAIL)
 endif()
+
+#---Insert Python metadata for ROOT import package----------------------------------------------
+include(InstallPythonMetadata)
 
 #---Configure Testing using CTest----------------------------------------------------------------
 configure_file(${CMAKE_SOURCE_DIR}/cmake/modules/CTestCustom.cmake ${CMAKE_BINARY_DIR} COPYONLY)
@@ -735,6 +738,30 @@ if(LLVM_LINKER_IS_MOLD)
   if(MOLD_VERSION VERSION_LESS "2.32.0")
     message(FATAL_ERROR "The mold linker version ${MOLD_VERSION} is not supported by ROOT. Please use mold >= 2.32.0 or a different linker")
   endif()
+endif()
+
+if(asan)
+  # Now sanitize all executables that are not created with ROOT_EXECUTABLE()
+  # See core/sanitizer for details
+  function(sanitize_all_targets DIR_TO_SEARCH)
+    get_property(subdirs DIRECTORY "${DIR_TO_SEARCH}" PROPERTY SUBDIRECTORIES)
+    foreach(subdir IN LISTS subdirs)
+      sanitize_all_targets("${subdir}")
+    endforeach()
+
+    get_directory_property(directory_targets DIRECTORY "${DIR_TO_SEARCH}" BUILDSYSTEM_TARGETS)
+    if(NOT MSVC)
+      foreach(target IN LISTS directory_targets)
+        get_target_property(target_type ${target} TYPE)
+        get_target_property(target_libs ${target} LINK_LIBRARIES)
+        if(target_type STREQUAL EXECUTABLE AND NOT target STREQUAL ROOTStaticSanitizerConfig AND NOT target_libs MATCHES "ROOTStaticSanitizerConfig")
+          target_link_libraries(${target} PRIVATE ROOTStaticSanitizerConfig)
+          message(VERBOSE "Adding sanitizer library to ${target} (not created via a ROOT macro): ${target_libs}")
+        endif()
+      endforeach()
+    endif()
+  endfunction()
+  sanitize_all_targets(${CMAKE_CURRENT_SOURCE_DIR})
 endif()
 
 cmake_host_system_information(RESULT PROCESSOR QUERY PROCESSOR_DESCRIPTION)

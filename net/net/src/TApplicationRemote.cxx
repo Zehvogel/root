@@ -20,9 +20,6 @@
 //                                                                      //
 //////////////////////////////////////////////////////////////////////////
 
-#include <cerrno>
-#include <random>
-
 #include "TApplicationRemote.h"
 
 #include "TBrowser.h"
@@ -34,7 +31,10 @@
 #include "TServerSocket.h"
 #include "TSystem.h"
 #include "TRemoteObject.h"
-#include "snprintf.h"
+
+#include <cerrno>
+#include <random>
+#include <cstdio>
 #ifdef WIN32
 #include <io.h>
 #include <sys/types.h>
@@ -168,7 +168,7 @@ TApplicationRemote::TApplicationRemote(const char *url, Int_t debug,
    if (gDebug > 0)
       Info("TApplicationRemote", "executing: %s", cmd.Data());
    if (gSystem->Exec(cmd) != 0) {
-      Info("TApplicationRemote", "an error occured during SSH connection");
+      Info("TApplicationRemote", "an error occurred during SSH connection");
       mon->DeActivateAll();
       delete mon;
       delete ss;
@@ -356,7 +356,7 @@ Int_t TApplicationRemote::Collect(Long_t timeout)
                Info("Collect","deactivating %p", s);
          }
 
-         // Update counter (if no error occured)
+         // Update counter (if no error occurred)
          if (rc >= 0)
             cnt++;
 

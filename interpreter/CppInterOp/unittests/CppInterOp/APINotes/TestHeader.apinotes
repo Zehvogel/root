@@ -1,0 +1,20 @@
+Name: TestHeader
+Functions:
+  - Name: testAlloc
+    RetainCountConvention: CFReturnsRetained
+  - Name: testNotAlloc
+    RetainCountConvention: CFReturnsNotRetained
+  - Name: testMalloc
+    SwiftReturnOwnership: cppAllocMalloc
+  - Name: testNew
+    SwiftReturnOwnership: cppAllocNew
+  - Name: testNewArr
+    SwiftReturnOwnership: cppAllocNewArr
+  - Name: testOperatorNew
+    SwiftReturnOwnership: cppAllocOperatorNew
+  - Name: testOperatorNewArr
+    SwiftReturnOwnership: cppAllocOperatorNewArr
+  - Name: testNone
+    SwiftReturnOwnership: cppAllocNone
+  - Name: testWeirdAttr
+    SwiftReturnOwnership: someWeirdAttr

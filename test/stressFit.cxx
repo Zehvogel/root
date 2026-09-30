@@ -53,22 +53,23 @@
 //                                                                           //
 //*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*-*_*//
 
-#include <cstdlib>
 #include "TSystem.h"
 #include "TROOT.h"
 #include "TBenchmark.h"
 #include "TMath.h"
 #include "TStopwatch.h"
-#include "Riostream.h"
 #include "TVectorD.h"
 #include "TMatrixD.h"
-#include "snprintf.h"
 
 #include "Math/Factory.h"
 #include "Math/Functor.h"
 #include "Math/IFunction.h"
 #include "Math/MinimizerOptions.h"
 #include "Math/Minimizer.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
 
 Int_t stressFit(const char *type = "Minuit", const char *algo = "Migrad", Int_t N = 2000);
 Int_t    gVerbose      = -1;
@@ -659,7 +660,7 @@ Int_t stressFit(const char *type, const char *algo, Int_t N)
 
   printf("******************************************************************\n");
   gBenchmark->Print("stressFit");
-#ifdef __CINT__
+#ifdef __CLING__
   Double_t reftime = 86.34; //macbrun interpreted
 #else
   Double_t reftime = 12.07; //macbrun compiled
@@ -675,7 +676,7 @@ Int_t stressFit(const char *type, const char *algo, Int_t N)
 }
 
 //_____________________________batch only_____________________
-#ifndef __CINT__
+#ifndef __CLING__
 
 int main(int argc,const char *argv[])
 {

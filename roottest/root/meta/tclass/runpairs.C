@@ -1,4 +1,4 @@
-#ifdef __CINT__
+#ifdef __CLING__
 
 
 #include <vector>
@@ -8,10 +8,11 @@
 
 #endif
 
-#include <typeinfo>
-#include "Riostream.h"
 #include "TVirtualCollectionProxy.h"
 #include "TEmulatedCollectionProxy.h"
+
+#include <typeinfo>
+#include <iostream>
 
 void whatis(TVirtualCollectionProxy* p) {
    if (p) cout << typeid(*p).name() << endl;
@@ -57,7 +58,7 @@ public:
    int get() { return val1*sizeof(val2)*val3.size()*val4.size(); }
 };
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class std::vector<std::pair<Char_t, UChar_t> >+;
 #pragma link C++ class std::pair<Char_t, UChar_t>+;
 #pragma link C++ class regular+;

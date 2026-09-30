@@ -14,8 +14,11 @@ from http import HTTPStatus
 from shutil import which
 from typing import Callable, Dict
 
-from openstack.connection import Connection
-from requests import get
+dry_run : bool = False
+
+def set_dry_run(d: bool):
+    global dry_run
+    dry_run = d
 
 
 def is_macos():
@@ -59,12 +62,14 @@ class Tracer:
     Trace command invocations and print them to reproduce builds.
     """
 
-    image = ""
+    platform = ""
+    platform_config = ""
     docker_opts = []
     trace = ""
 
-    def __init__(self, image: str, docker_opts: str):
-        self.image = image
+    def __init__(self, platform: str, platform_config: str, docker_opts: str):
+        self.platform = platform
+        self.platform_config = platform_config
         if docker_opts:
             self.docker_opts = docker_opts.split(' ')
         if '--rm' in self.docker_opts:
@@ -76,16 +81,20 @@ class Tracer:
     @github_log_group("To replicate this build locally")
     def print(self) -> None:
         if self.trace != "":
-            if self.image and not is_macos():
+            if self.platform and not is_macos():
                 print(f"""\
 # Grab the image and set up the python virtual environment:
-docker run {' '.join(self.docker_opts)} -it registry.cern.ch/root-ci/{self.image}:buildready
+docker run {' '.join(self.docker_opts)} -it registry.cern.ch/root-ci/{self.platform}:buildready
 if [ -d /py-venv/ROOT-CI/bin/ ]; then . /py-venv/ROOT-CI/bin/activate && echo PATH=$PATH >> $GITHUB_ENV; fi
+""")
+                if self.platform != self.platform_config:
+                    print(f"""\
+# Note that the variant {self.platform_config} will be used when configuring
 """)
             print(self.trace)
 
 
-log = Tracer("", "")
+log = Tracer("", "", "")
 
 
 def print_fancy(*values, sgr=1, **kwargs) -> None:
@@ -108,6 +117,16 @@ def print_warning(*values, **kwargs):
 def print_error(*values, **kwargs):
     print_fancy("Fatal error: ", *values, sgr=31, **kwargs)
 
+def print_options_diff(new, old):
+    """Print difference between build option dicts"""
+
+    for key in sorted(new):
+        try:
+            if new[key] != old[key]:
+                print(f"\t{key: <30}{old[key]} --> {new[key]}")
+        except KeyError:
+            print(f"\t{key: <30}None --> {new[key]}")
+
 
 def subprocess_with_log(command: str) -> int:
     """Runs <command> in shell and appends <command> to log"""
@@ -119,13 +138,16 @@ def subprocess_with_log(command: str) -> int:
     if os.name == 'nt':
         command = "$env:comspec = 'cmd.exe'; " + command
 
-    result = subprocess.run(command, shell=True, check=False, stderr=subprocess.STDOUT)
+    if not dry_run:
+        result = subprocess.run(command, shell=True, check=False, stderr=subprocess.STDOUT)
+    else:
+        print(command)
 
     print("\033[0m", end='')
 
     log.add(command)
 
-    return result.returncode
+    return 0 if dry_run else result.returncode
 
 def subprocess_with_capture(command: str):
     """Runs <command> in shell, capture output and appends <command> to log"""
@@ -161,6 +183,8 @@ def die(code: int = 1, msg: str = "") -> None:
 def load_config(filename) -> dict:
     """Loads cmake options from a file to a dictionary"""
 
+    print(f"Loading configuration from file {filename}")
+
     options = {}
 
     try:
@@ -182,9 +206,6 @@ def load_config(filename) -> dict:
                key = split_line[0]
                val = split_line[1]+'='+split_line[2]
 
-            if val.lower() in ["on", "off"]:
-                val = val.lower()
-
             options[key] = val
 
     return options
@@ -192,11 +213,12 @@ def load_config(filename) -> dict:
 
 def cmake_options_from_dict(config: Dict[str, str]) -> str:
     """Converts a dictionary of build options to string.
-       The output is sorted alphanumerically.
+    The output is sorted alphanumerically.
 
-       example: {"builtin_xrootd"="on", "alien"="on"}
-                        ->
-                 '"-Dalien=on" -Dbuiltin_xrootd=on"'
+    example: {"builtin_xrootd"="on", "arrow"="on"}
+                     ->
+              '"-Darrow=on" -Dbuiltin_xrootd=on"'
+    The key CMAKE_GENERATOR is used to set the CMake generator.
     """
 
     if not config:
@@ -204,12 +226,21 @@ def cmake_options_from_dict(config: Dict[str, str]) -> str:
 
     output = []
 
+    cmake_generator = None
     for key, value in config.items():
-        output.append(f'"-D{key}={value}"')
+        if key == "CMAKE_GENERATOR":
+            cmake_generator = value
+        else:
+            value_upper = value.upper()
+            value = value_upper if value_upper in ["YES", "NO"] else value
+            output.append(f'"-D{key}={value}"')
 
     output.sort()
+    if cmake_generator:
+        output.append(f'"-G{cmake_generator}"')
+    cmake_options = ' '.join(output)
 
-    return ' '.join(output)
+    return cmake_options
 
 def calc_options_hash(options: str) -> str:
     """Calculate the hash of the options string. If "march=native" is in the
@@ -228,7 +259,7 @@ def calc_options_hash(options: str) -> str:
         options_and_defines += sp_result.stdout
     return sha1(options_and_defines.encode('utf-8')).hexdigest()
 
-def upload_file(connection: Connection, container: str, dest_object: str, src_file: str) -> None:
+def upload_file(connection, container: str, dest_object: str, src_file: str) -> None:
     print(f"Attempting to upload {src_file} to {dest_object}")
 
     if not os.path.exists(src_file):
@@ -272,6 +303,8 @@ def upload_file(connection: Connection, container: str, dest_object: str, src_fi
 
 
 def download_file(url: str, dest: str) -> None:
+    from requests import get
+
     print(f"\nAttempting to download {url} to {dest}")
 
     parent_dir = os.path.dirname(dest)
@@ -287,6 +320,7 @@ def download_latest(url: str, prefix: str, destination: str) -> str:
     """Downloads latest build artifact starting with <prefix>,
        and returns the file path to the downloaded file and shell_log."""
 
+    from requests import get
     # https://docs.openstack.org/api-ref/object-store/#show-container-details-and-list-objects
     with get(f"{url}/?prefix={prefix}&format=json", timeout=20) as req:
         if req.status_code == HTTPStatus.NO_CONTENT or req.content == b'[]':
@@ -316,7 +350,7 @@ def remove_file_match_ext(directory: str, extension: str) -> str:
         extension (str): The regular expression pattern to match filenames against.
     """
     print_fancy(f"Removing gcda files from {directory}")
-    log.add(f"\nfind {directory} -name \*.gcda -exec rm {{}} \;")
+    log.add(f"\nfind {directory} -name \\*.gcda -exec rm {{}} \\;")
     pattern = "." + extension
     count = 0
     for currentdir, _, files in os.walk(directory):

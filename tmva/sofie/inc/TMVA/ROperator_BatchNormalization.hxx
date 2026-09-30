@@ -111,7 +111,7 @@ public:
 
       if (fShapeX.size() <  2 || fShapeX.size() > 4) {
          throw
-            std::runtime_error("TMVA SOFIE BatchNormalization Op input tensor " + fNX + " fnx has wrong shape : " + ConvertShapeToString(fShapeX));
+            std::runtime_error("TMVA SOFIE BatchNormalization Op input tensor " + fNX + " fnx has wrong shape : " + ConvertDimShapeToString(fShapeX));
       }
 
       fShapeY = fShapeX;
@@ -141,8 +141,8 @@ public:
       }
    }
 
-   std::string Generate(std::string OpName) override {
-      OpName = "op_" + OpName;
+   std::string Generate(std::string opName) override {
+      opName = "op_" + opName;
       if (fShapeX.empty()){
          throw std::runtime_error("TMVA SOFIE Batch Normalization called to Generate without being initialized first");
       }
@@ -158,7 +158,7 @@ public:
          spatial_dim = ConvertDimShapeToLength( spatialShape);
       }
 
-      out << "\n\n//---- BatchNorm" << (fActivation == EActivationType::RELU ? " + ReLU" : "") << "\n";
+      out << "\n\n//---- BatchNorm" << (fActivation == EActivationType::RELU ? " + ReLU " : " ") << opName << "\n";
       out << SP << "{\n";
       out << SP << "   size_t i = 0;\n";
       out << SP << "   for (size_t n = 0; n < " << batchSize << "; ++n) {\n";

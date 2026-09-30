@@ -55,6 +55,7 @@ in each category.
 #include "RooBinSamplingPdf.h"
 #include "RooCategory.h"
 #include "RooCmdConfig.h"
+#include "RooCompositeDataStore.h"
 #include "RooDataHist.h"
 #include "RooDataSet.h"
 #include "RooGlobalFunc.h"
@@ -85,6 +86,15 @@ std::map<std::string, RooAbsPdf *> createPdfMap(const RooArgList &inPdfList, Roo
       pdfMap[nameIdx.first] = pdf;
    }
    return pdfMap;
+}
+
+void replaceOrAdd(RooLinkedList &lst, TObject &obj)
+{
+   TObject *old = lst.FindObject(obj.GetName());
+   if (old)
+      lst.Replace(old, &obj);
+   else
+      lst.Add(&obj);
 }
 
 } // namespace
@@ -587,6 +597,43 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
   // Sanity checks
   if (plotSanityChecks(frame)) return frame ;
 
+  // Special case: if an asymmetry is requested with respect to our index
+  // category, we cannot reroute the plotting to the component pdfs. The
+  // component pdfs don't depend on the index category, so the asymmetry engine
+  // in the base class would not be able to split them by index state. Instead,
+  // we delegate directly to the base class implementation, which constructs the
+  // asymmetry from the two index-state component pdfs (see the overridden
+  // createAsymmetryComponent() and GitHub issue #14255).
+  if (auto *asymCmd = static_cast<RooCmdArg *>(cmdList.FindObject("Asymmetry"))) {
+    auto *asymCat = dynamic_cast<RooAbsCategory const *>(asymCmd->getObject(0));
+    if (asymCat && asymCat == &_indexCat.arg()) {
+
+      RooLinkedList cmdList2(cmdList);
+
+      // The base-class asymmetry-plotting engine averages the projection over
+      // the projection dataset. This is not supported for the composite data
+      // stores that back datasets with a category index, so we flatten such a
+      // projection dataset into a plain (vector-backed) copy first. Both the
+      // copy and the replacement command must outlive the plotOn() call below,
+      // because the command list only stores pointers to them.
+      std::unique_ptr<RooAbsData> flatProjData;
+      RooCmdArg newProjWData;
+      if (auto *projWData = static_cast<RooCmdArg *>(cmdList2.FindObject("ProjData"))) {
+        auto *projData = dynamic_cast<RooDataSet const *>(projWData->getObject(1));
+        if (projData && dynamic_cast<RooCompositeDataStore const *>(projData->store())) {
+          flatProjData = std::make_unique<RooDataSet>(projData->GetName(), projData->GetTitle(), *projData->get(),
+                                                      RooFit::Import(*const_cast<RooDataSet *>(projData)));
+          const RooArgSet *projDataSet = projWData->getSet(0);
+          newProjWData = projDataSet ? RooFit::ProjWData(*projDataSet, *flatProjData)
+                                     : RooFit::ProjWData(*flatProjData);
+          replaceOrAdd(cmdList2, newProjWData);
+        }
+      }
+
+      return RooAbsReal::plotOn(frame, cmdList2);
+    }
+  }
+
   // Extract projection configuration from command list
   RooCmdConfig pc("RooSimultaneous::plotOn(" + std::string(GetName()) + ")");
   pc.defineString("sliceCatState","SliceCat",0,"",true) ;
@@ -768,15 +815,16 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
        projDataTmp(projData->reduce(RooFit::SelectVars(projDataVars), RooFit::Cut(cutString.c_str())));
 
     // Override normalization and projection dataset
-    RooCmdArg tmp1 = RooFit::Normalization(scaleFactor*wTable->getFrac(idxCatClone->getCurrentLabel()),stype) ;
+    RooCmdArg tmp1 =
+       RooFit::Normalization(scaleFactor * wTable->get(idxCatClone->getCurrentLabel()), RooAbsReal::NumEvent);
     RooCmdArg tmp2 = RooFit::ProjWData(*projDataSet,*projDataTmp) ;
 
     // WVE -- do not adjust normalization for asymmetry plots
     RooLinkedList cmdList2(cmdList) ;
     if (!cmdList.find("Asymmetry")) {
-      cmdList2.Add(&tmp1) ;
+      replaceOrAdd(cmdList2, tmp1);
     }
-    cmdList2.Add(&tmp2) ;
+    replaceOrAdd(cmdList2, tmp2);
 
     // Plot single component
     RooPlot* retFrame = getPdf(idxCatClone->getCurrentLabel())->plotOn(frame,cmdList2);
@@ -810,8 +858,8 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
     }
     if (skip) continue ;
 
-    // Instantiate a RRV holding this pdfs weight fraction
-    wgtCompList.addOwned(std::make_unique<RooRealVar>(proxy->name(),"coef",wTable->getFrac(proxy->name())));
+    // Instantiate a RRV holding this pdfs weight
+    wgtCompList.addOwned(std::make_unique<RooRealVar>(proxy->name(),"coef",wTable->get(proxy->name())));
     sumWeight += wTable->getFrac(proxy->name()) ;
 
     // Add the PDF to list list
@@ -875,15 +923,15 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
   RooCmdArg tmp2 = RooFit::ProjWData(*projDataSet,*projDataTmp) ;
   // WVE -- do not adjust normalization for asymmetry plots
   if (!cmdList.find("Asymmetry")) {
-    cmdList2.Add(&tmp1) ;
+    replaceOrAdd(cmdList2, tmp1);
   }
-  cmdList2.Add(&tmp2) ;
+  replaceOrAdd(cmdList2, tmp2);
 
   RooPlot* frame2 ;
   if (!projSetTmp.empty()) {
     // Plot temporary function
     RooCmdArg tmp3 = RooFit::Project(projSetTmp) ;
-    cmdList2.Add(&tmp3) ;
+    replaceOrAdd(cmdList2, tmp3);
     frame2 = plotVar.plotOn(frame,cmdList2) ;
   } else {
     // Plot temporary function
@@ -895,6 +943,32 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
 
 
 ////////////////////////////////////////////////////////////////////////////////
+/// Build the component function of an asymmetry plot (see
+/// RooAbsReal::plotAsymOn()) for a fixed state of the asymmetry category.
+///
+/// When the asymmetry is requested in our own index category, the component for
+/// a given index state is simply the corresponding pdf. We return a clone of
+/// that pdf directly instead of a RooSimultaneous with a pinned index, because
+/// a RooSimultaneous compiles its per-category observables with a category
+/// prefix. That prefix makes it incompatible with the vectorized evaluation
+/// backend that averages the asymmetry over the projection data, and would
+/// otherwise silently yield a flat (zero) asymmetry (see issue #14255). For any
+/// other asymmetry category we fall back to the generic implementation.
+
+std::unique_ptr<RooAbsReal>
+RooSimultaneous::createAsymmetryComponent(const RooAbsCategoryLValue &asymCat, const RooAbsCategoryLValue &asymCatState) const
+{
+   if (&asymCat == &_indexCat.arg()) {
+      const std::string &label = _indexCat.arg().lookupName(asymCatState.getCurrentIndex());
+      if (RooAbsPdf *pdf = getPdf(label)) {
+         return RooHelpers::cloneTreeWithSameParameters(static_cast<RooAbsReal const &>(*pdf));
+      }
+   }
+   return RooAbsReal::createAsymmetryComponent(asymCat, asymCatState);
+}
+
+
+////////////////////////////////////////////////////////////////////////////////
 /// Interface function used by test statistics to freeze choice of observables
 /// for interpretation of fraction coefficients. Needed here because a RooSimultaneous
 /// works like a RooAddPdf when plotted
@@ -902,7 +976,18 @@ RooPlot* RooSimultaneous::plotOn(RooPlot *frame, RooLinkedList& cmdList) const
 void RooSimultaneous::selectNormalization(const RooArgSet* normSet, bool /*force*/)
 {
   _plotCoefNormSet.removeAll() ;
-  if (normSet) _plotCoefNormSet.add(*normSet) ;
+  if (normSet) {
+     // The index category must not be stored in the set: it is meaningless for
+     // the coefficient normalization, since it is never an observable of the
+     // component pdfs (RooAddPdf::selectNormalization() would filter it out
+     // again anyway). Worse, it is already registered as a value server via
+     // the index category proxy, and registering the same server a second
+     // time through this non-propagating set proxy corrupts the reference
+     // counts of the server's client lists when the set is cleared again.
+     RooArgSet filteredNormSet{*normSet};
+     filteredNormSet.remove(_indexCat.arg(), true, true);
+     _plotCoefNormSet.add(filteredNormSet);
+  }
 }
 
 
@@ -1165,6 +1250,22 @@ RooArgSet const& RooSimultaneous::flattenedCatList() const
    return *_indexCatSet;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// Check if the index category is among the variables `vars`, matching by
+/// name. For a RooSuperCategory index, any of its input categories counts.
+///
+/// If the index category is not among the observables of a fit, this
+/// RooSimultaneous does not split the data into channels: it acts as a
+/// "switch" that evaluates to the component selected by the current index
+/// state, analogous to RooMultiPdf. Fitting infrastructure uses this check to
+/// decide between the two modes.
+bool RooSimultaneous::indexCatIsObservable(RooArgSet const &vars) const
+{
+   RooArgSet catsAmongVars;
+   vars.selectCommon(flattenedCatList(), catsAmongVars);
+   return !catsAmongVars.empty();
+}
+
 namespace {
 
 void markObs(RooAbsArg *arg, std::string const &prefix, RooArgSet const &normSet)
@@ -1199,6 +1300,17 @@ void prefixArgs(RooAbsArg *arg, std::string const &prefix, RooArgSet const &norm
 std::unique_ptr<RooAbsArg>
 RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext &ctx) const
 {
+   if (!indexCatIsObservable(normSet)) {
+      // The index category is not an observable here: the RooSimultaneous
+      // acts as a plain "switch" that evaluates to the component selected by
+      // the current index state, analogous to RooMultiPdf. The channel
+      // observables are then the same as the ones of this pdf, so the
+      // channel-splitting compilation below (which renames the per-channel
+      // observables so they can be filled from split datasets) must not be
+      // used. Compile like an ordinary self-normalized pdf instead.
+      return RooAbsPdf::compileForNormSet(normSet, ctx);
+   }
+
    std::unique_ptr<RooSimultaneous> newSimPdf{static_cast<RooSimultaneous *>(this->Clone())};
 
    const char *rangeName = this->getStringAttribute("RangeName");
@@ -1233,6 +1345,12 @@ RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::Com
       pdfContext.setLikelihoodMode(ctx.likelihoodMode());
       auto *pdfFinal = pdfContext.compile(*pdfClone, *newSimPdf, *pdfNormSet);
 
+      // The observables of the compiled computation graph are clones of the
+      // ones in `pdfNormSet`, and only the clones are prefixed below. That's
+      // why we have to translate the normalization set to the compiled args
+      // before using it any further.
+      RooArgSet compiledPdfNormSet = pdfContext.mapToCompiled(*pdfNormSet);
+
       // We can only prefix the observables after everything related the
       // compiling of the compute graph for the normalization set is done. This
       // is because of a subtlety in conditional RooProdPdfs, which stores the
@@ -1242,7 +1360,12 @@ RooSimultaneous::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::Com
       // but this has more performance overhead.
       prefixArgs(pdfFinal, prefix, normSet);
 
-      pdfFinal->fixAddCoefNormalization(*pdfNormSet, false);
+      // This has to be done with the observables of the compiled graph, which
+      // are prefixed at this point. Otherwise, the RooAddPdf components don't
+      // find their coefficient normalization observables and silently keep the
+      // default "automatic" interpretation of the coefficients, which results
+      // in wrong yields in ranged fits (GitHub issue #23444).
+      pdfFinal->fixAddCoefNormalization(compiledPdfNormSet, false);
 
       pdfClone->SetName((std::string("_") + pdfClone->GetName()).c_str());
       pdfFinal->addOwnedComponents(std::move(pdfClone));

@@ -87,7 +87,7 @@ public:
            void     FillN(Int_t, const Double_t *, const Double_t *, Int_t) override {} //MayNotUse
            void     FillN(Int_t ntimes, const Double_t *x, const Double_t *y, const Double_t *w, Int_t stride=1) override;
    using TH1::FillRandom;
-           void     FillRandom(TF1 *f1, Int_t ntimes=5000, TRandom *rng = nullptr) override;
+           void     FillRandom(TF1 *function, Int_t ntimes=5000, TRandom *rng = nullptr) override;
            void     FillRandom(TH1 *h, Int_t ntimes=5000, TRandom *rng = nullptr) override;
    virtual void     FitSlicesX(TF1 *f1 = nullptr, Int_t firstybin=0, Int_t lastybin=-1, Int_t cut=0, Option_t *option="QNR", TObjArray* arr = nullptr);
    virtual void     FitSlicesY(TF1 *f1 = nullptr, Int_t firstxbin=0, Int_t lastxbin=-1, Int_t cut=0, Option_t *option="QNR", TObjArray* arr = nullptr);
@@ -115,7 +115,7 @@ public:
            TH2     *RebinX(Int_t ngroup=2, const char *newname="") override; // *MENU*
    virtual TH2     *RebinY(Int_t ngroup=2, const char *newname=""); // *MENU*
            TH2     *Rebin(Int_t ngroup=2, const char*newname="", const Double_t *xbins = nullptr) override;  // re-implementation of the TH1 function using RebinX
-   virtual TH2     *Rebin2D(Int_t nxgroup=2, Int_t nygroup=2, const char *newname=""); // *MENU*
+   virtual TH2     *Rebin2D(Int_t nxgroup=2, Int_t nygroup=2, const char *newname="", const Double_t *xbins=nullptr, const Double_t *ybins=nullptr); // *MENU*
           TProfile *ProfileX(const char *name="_pfx", Int_t firstybin=1, Int_t lastybin=-1, Option_t *option="") const;   // *MENU*
           TProfile *ProfileY(const char *name="_pfy", Int_t firstxbin=1, Int_t lastxbin=-1, Option_t *option="") const;   // *MENU*
            TH1D    *ProjectionX(const char *name="_px", Int_t firstybin=0, Int_t lastybin=-1, Option_t *option="") const; // *MENU*
@@ -130,9 +130,9 @@ public:
    virtual void     SetShowProjectionX(Int_t nbins=1);  // *MENU*
    virtual void     SetShowProjectionY(Int_t nbins=1);  // *MENU*
    virtual void     SetShowProjectionXY(Int_t nbinsY=1, Int_t nbinsX=1);  // *MENU*
-           TH1     *ShowBackground(Int_t niter=20, Option_t *option="same") override;
-           Int_t    ShowPeaks(Double_t sigma=2, Option_t *option="", Double_t threshold=0.05) override; // *MENU*
-           void     Smooth(Int_t ntimes=1, Option_t *option="") override; // *MENU*
+   virtual TH1     *ShowBackground2D(Int_t nIterX = 20, Int_t nIterY = 20, Option_t *option = "same");
+   Int_t            ShowPeaks(Double_t sigma = 2, Option_t *option = "", Double_t threshold = 0.05) override; // *MENU*
+   void             Smooth(Int_t ntimes = 1, Option_t *option = "") override;                                 // *MENU*
 
    ClassDefOverride(TH2,5)  //2-Dim histogram base class
 };
@@ -325,7 +325,7 @@ public:
 
 protected:
    Double_t RetrieveBinContent(Int_t bin) const override { return Double_t (fArray[bin]); }
-   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Int_t (content); }
+   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Long64_t (content); }
 
    ClassDefOverride(TH2L,0)  //2-Dim histograms (one 64 bit integer per channel)
 };

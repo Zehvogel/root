@@ -1,6 +1,6 @@
 import os, sys, pytest
 from pytest import mark, raises, skip
-from support import setup_make, IS_WINDOWS, ispypy, IS_MAC_X86, IS_MAC_ARM, IS_MAC
+from support import setup_make, IS_WINDOWS, ispypy, IS_MAC, IS_MAC_ARM
 
 
 class TestREGRESSION:
@@ -83,7 +83,6 @@ class TestREGRESSION:
         # TODO: it's deeply silly that namespaces inherit from CPPInstance (in CPyCppyy)
         assert ('CPPInstance' in helptext or 'CPPNamespace' in helptext)
 
-    @mark.xfail(condition=IS_MAC, reason="Fails on OSX")
     def test03_pyfunc_doc(self):
         """Help on a generated pyfunc used to crash."""
 
@@ -104,7 +103,7 @@ class TestREGRESSION:
 
         assert 1 == cppyy.gbl.py2long(1)
 
-    @mark.xfail(reason="Fails on \"alma9 modules_off runtime_cxxmodules=Off\"")
+    @mark.skip(reason="For ROOT, we don't enable AVX by default ('-mavx' is not passed to Cling)")
     def test04_avx(self):
         """Test usability of AVX by default."""
 
@@ -254,7 +253,7 @@ class TestREGRESSION:
         a = cppyy.gbl.CObjA()
         co = cppyy.ll.as_cobject(a)
 
-        assert a == cppyy.bind_object(co, 'CObjA')
+        assert a is cppyy.bind_object(co, 'CObjA')
         assert a.m_int == 42
         assert cppyy.bind_object(co, 'CObjA').m_int == 42
 
@@ -381,7 +380,7 @@ class TestREGRESSION:
         sizeit = cppyy.gbl.vec_vs_init.sizeit
         assert sizeit(list(range(10))) == 10
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test16_iterable_enum(self):
         """Use template to iterate over an enum"""
       # from: https://stackoverflow.com/questions/52459530/pybind11-emulate-python-enum-behaviour
@@ -474,7 +473,6 @@ class TestREGRESSION:
 
         assert a != b             # derived class' C++ operator!= called
 
-    @mark.xfail()
     def test18_operator_plus_overloads(self):
         """operator+(string, string) should return a string"""
 
@@ -486,7 +484,10 @@ class TestREGRESSION:
         assert a == 'a'
         assert b == 'b'
 
-        assert type(a+b) == cppyy.gbl.std.string
+        # Expect same return type as other funcs returning a std::string in
+        # C++, which might be different from gbl.std.string on the Python side
+        # depending on the enabled Pythonizations.
+        assert type(a + b) == type(cppyy.gbl.std.to_string(42))
         assert a+b == 'ab'
 
     def test19_std_string_hash(self):
@@ -706,7 +707,6 @@ class TestREGRESSION:
             i += 1
         assert i
 
-    @mark.xfail()
     def test26_const_charptr_data(self):
         """const char* is not const; const char* const is"""
 
@@ -785,8 +785,8 @@ class TestREGRESSION:
         null = cppyy.gbl.exception_as_shared_ptr.get_shared_null()
         assert not null
 
-    @mark.skip()
-    def test29_callback_pointer_values(self):
+    @mark.xfail(strict=True)
+    def test29_callback_pointer_values(self, capfd):
         """Make sure pointer comparisons in callbacks work as expected"""
 
         import cppyy
@@ -856,7 +856,12 @@ class TestREGRESSION:
         g.triggerChange()
         assert g.success
 
-    @mark.xfail()
+        # Fail if there was a specific interpreter error
+        captured = capfd.readouterr()
+        output = (captured.out + captured.err).lower()
+        assert "taking address of non-addressable standard library function" not in output
+
+    @mark.xfail(strict=True, condition=IS_MAC or IS_WINDOWS, reason="int64_t and uint64_t not automatically materialized on macOS and Windows")
     def test30_uint64_t(self):
         """Failure due to typo"""
 
@@ -890,7 +895,7 @@ class TestREGRESSION:
         assert ns.TTest(True).fT == True
         assert type(ns.TTest(True).fT) == bool
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test31_enum_in_dir(self):
         """Failed to pick up enum data"""
 
@@ -913,7 +918,7 @@ class TestREGRESSION:
         required = {'prod', 'a', 'b', 'smth', 'my_enum'}
         assert all_names.intersection(required) == required
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test32_typedef_class_enum(self):
         """Use of class enum with typedef'd type"""
 
@@ -951,7 +956,7 @@ class TestREGRESSION:
             assert o.x == Foo.BAZ
             assert o.y == 1
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test33_explicit_template_in_namespace(self):
         """Lookup of explicit template in namespace"""
 
@@ -1111,9 +1116,13 @@ class TestREGRESSION:
             len(ai.name) == 6
             assert ai.name[:len(s)] == s
 
-        with warnings.catch_warnings(record=True) as w:
-            ai.name = u'hellowd'
-            assert 'too long' in str(w[-1].message)
+      # isolate the warning configuration
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # turn warnings into errors
+
+            with pytest.raises(RuntimeWarning) as exc:
+                ai.name = u'hellowd'
+            assert 'too long' in str(exc.value)
 
         # vector of objects
         va = cppyy.gbl.std.vector[ns.AxisInformation](N)
@@ -1349,7 +1358,7 @@ class TestREGRESSION:
         finally:
             cppyy._backend.SetHeuristicMemoryPolicy(old_memory_policy)
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test45_typedef_resolution(self):
         """Typedefs starting with 'c'"""
 
@@ -1363,7 +1372,7 @@ class TestREGRESSION:
         assert cppyy.gbl.CppyyLegacy.TClassEdit.ResolveTypedef("my_custom_type_t") == "const int"
         assert cppyy.gbl.CppyyLegacy.TClassEdit.ResolveTypedef("cmy_custom_type_t") == "const int"
 
-    @mark.xfail(run=False, condition=IS_MAC_ARM, reason = "Crashes on OS X ARM with" \
+    @mark.xfail(run=IS_WINDOWS != 64, condition=IS_MAC_ARM | IS_WINDOWS == 64, reason = "Crashes on Windows 64 bit and fails macOS ARM with" \
     "libc++abi: terminating due to uncaught exception")
     def test46_exception_narrowing(self):
         """Exception narrowing to C++ exception of all overloads"""
@@ -1384,6 +1393,55 @@ class TestREGRESSION:
         with raises(cppyy.gbl.std.logic_error):
             foo.bar()
 
+    def test47_initializer_list_fail(self, capfd):
+        """Conversion to intializer_list requires default constructor"""
+
+        import cppyy
+
+        cppyy.cppdef("""\
+        namespace regression_test47 {
+        std::size_t size = 0;
+        struct IntWrapper { IntWrapper(int i) : fInt(i) {} int fInt; };
+        void f(std::initializer_list<IntWrapper> l) {}
+        void f(std::vector<IntWrapper> l) { size = l.size(); }
+        }""")
+
+        r47 = cppyy.gbl.regression_test47
+
+        assert r47.size == 0
+
+        r47.f([1])
+        assert r47.size == 1
+        (out, err) = capfd.readouterr()
+        assert out == ""
+        assert err == ""
+
+    @mark.xfail(run=False, condition=IS_WINDOWS == 64, reason="LLVM JIT fails to catch exceptions")
+    def test49_overloads_with_runtime_errors(self):
+        """Regression test for https://github.com/root-project/root/issues/17497
+
+        LLVM JIT failes to catch exceptions on Windows 64bit, so we disable their testing
+        """
+        import cppyy
+
+        std = cppyy.gbl.std
+
+        cppyy.cppdef(
+            r"""
+        void fun(std::string_view, std::string_view){throw std::runtime_error("std::string_view overload");}
+        void fun(std::string_view, const std::vector<std::string> &){throw std::runtime_error("const std::vector<std::string> & overload");}
+        """
+        )
+
+        with raises(std.runtime_error):
+            cppyy.gbl.fun("", [])
+        with raises(std.runtime_error):
+            cppyy.gbl.fun(std.string_view("hello world"), std.vector[std.string]())
+        with raises(std.runtime_error):
+            cppyy.gbl.fun("", std.vector[std.string]())
+        with raises(std.runtime_error):
+            cppyy.gbl.fun(std.string_view("hello world"), [])
+
 
 if __name__ == "__main__":
-    exit(pytest.main(args=['-sv', '-ra', __file__]))
+    exit(pytest.main(args=['-v', '-ra', __file__]))

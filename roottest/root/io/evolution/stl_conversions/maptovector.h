@@ -2,9 +2,9 @@
 #define MAPTOVECTOR_H
 
 #include "TFile.h"
-#include "Riostream.h"
 #include "TString.h"
 
+#include <iostream>
 #include <map>
 #include <vector>
 #include <list>
@@ -120,7 +120,7 @@ bool readfile(const char *filename, Bool_t checkValue = kTRUE)
    }
 }
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class myclass+;
 // #pragma link C++ class pair<int,double>+;
 #pragma link C++ function readfile;

@@ -101,6 +101,95 @@ TEST(RDFSnapshotRNTuple, LazyNotTriggered)
    EXPECT_TRUE(gSystem->AccessPathName(fileGuard.GetPath().c_str()));
 }
 
+TEST(RDFSnapshotRNTuple, WriteOpts)
+{
+   FileRAII fileGuard{"RDFSnapshotRNTuple_write_opts.root"};
+   const std::vector<std::string> columns = {"x"};
+
+   auto df = ROOT::RDataFrame(100ull).Define("x", [] { return std::uint64_t(10); });
+
+   RSnapshotOptions opts;
+   opts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+   opts.fCompressionAlgorithm = ROOT::RCompressionSetting::EAlgorithm::kUndefined;
+   opts.fCompressionLevel = 0;
+   // 2 clusters
+   opts.fApproxZippedClusterSize = 50 * sizeof(std::uint64_t);
+   opts.fMaxUnzippedClusterSize = 50 * sizeof(std::uint64_t);
+   // 4 pages, 2 per cluster
+   opts.fInitialUnzippedPageSize = 5 * sizeof(std::uint64_t);
+   opts.fMaxUnzippedPageSize = 25 * sizeof(std::uint64_t);
+   opts.fEnablePageChecksums = false;
+   opts.fEnableSamePageMerging = false;
+
+   auto sdf = df.Snapshot("ntuple", fileGuard.GetPath(), "x", opts);
+
+   EXPECT_EQ(columns, sdf->GetColumnNames());
+
+   auto reader = RNTupleReader::Open("ntuple", fileGuard.GetPath());
+   EXPECT_EQ(2, reader->GetDescriptor().GetNClusters());
+   EXPECT_EQ(2, reader->GetDescriptor().GetClusterDescriptor(0).GetPageRange(0).GetPageInfos().size());
+   EXPECT_EQ(2, reader->GetDescriptor().GetClusterDescriptor(1).GetPageRange(0).GetPageInfos().size());
+   EXPECT_FALSE(reader->GetDescriptor().GetClusterDescriptor(0).GetPageRange(0).GetPageInfos()[0].HasChecksum());
+
+   // Setting TTree-specific options while the output format is set to RNTuple should result in a warning
+   {
+      RSnapshotOptions unusedOpts;
+      unusedOpts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+      unusedOpts.fAutoFlush = 1;
+
+      ROOT_EXPECT_WARNING(df.Snapshot("ntuple", "RDFSnapshotRNTuple_write_opts_unused.root", "x", unusedOpts),
+                          "Snapshot",
+                          "The TTree-specific fAutoFlush option in RSnapshotOptions has been set, but the output "
+                          "format is set to RNTuple, so this option won't have any effect. Use the fNTupleWriteOptions "
+                          "option available in RSnapshotOptions to configure the output RNTuple. Alternatively, change "
+                          "fOutputFormat to snapshot to TTree instead.");
+   }
+   {
+      RSnapshotOptions unusedOpts;
+      unusedOpts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+      unusedOpts.fSplitLevel = 1;
+
+      ROOT_EXPECT_WARNING(df.Snapshot("ntuple", "RDFSnapshotRNTuple_write_opts_unused.root", "x", unusedOpts),
+                          "Snapshot",
+                          "The TTree-specific fSplitLevel option in RSnapshotOptions has been set, but the output "
+                          "format is set to RNTuple, so this option won't have any effect. Use the fNTupleWriteOptions "
+                          "option available in RSnapshotOptions to configure the output RNTuple. Alternatively, change "
+                          "fOutputFormat to snapshot to TTree instead.");
+   }
+   {
+      RSnapshotOptions unusedOpts;
+      unusedOpts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+      unusedOpts.fBasketSize = 64000;
+
+      ROOT_EXPECT_WARNING(df.Snapshot("ntuple", "RDFSnapshotRNTuple_write_opts_unused.root", "x", unusedOpts),
+                          "Snapshot",
+                          "The TTree-specific fBasketSize option in RSnapshotOptions has been set, but the output "
+                          "format is set to RNTuple, so this option won't have any effect. Use the fNTupleWriteOptions "
+                          "option available in RSnapshotOptions to configure the output RNTuple. Alternatively, change "
+                          "fOutputFormat to snapshot to TTree instead.");
+   }
+}
+
+TEST(RDFSnapshotRNTuple, DefaultCompressionSettings)
+{
+   FileRAII fileGuard{"RDFSnapshotRNTuple_default_compression_settings.root"};
+   const std::vector<std::string> columns = {"x"};
+
+   auto df = ROOT::RDataFrame(25ull).Define("x", [] { return 10; });
+
+   RSnapshotOptions opts;
+   opts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+
+   auto sdf = df.Snapshot("ntuple", fileGuard.GetPath(), {"x"}, opts);
+
+   EXPECT_EQ(columns, sdf->GetColumnNames());
+
+   auto reader = RNTupleReader::Open("ntuple", fileGuard.GetPath());
+   auto compSettings = *reader->GetDescriptor().GetClusterDescriptor(0).GetColumnRange(0).GetCompressionSettings();
+   // The RNTuple default should be 505
+   EXPECT_EQ(505, compSettings);
+}
+
 TEST(RDFSnapshotRNTuple, Compression)
 {
    FileRAII fileGuard{"RDFSnapshotRNTuple_compression.root"};
@@ -432,9 +521,9 @@ TEST(RDFSnapshotRNTuple, UpdateSameName)
       FAIL() << "snapshotting in \"UPDATE\" mode to the same ntuple name without `fOverwriteIfExists` is not allowed ";
    } catch (const std::invalid_argument &err) {
       EXPECT_STREQ(err.what(),
-                   "Snapshot: RNTuple \"ntuple\" already present in file "
+                   "Snapshot: object \"ntuple\" already present in file "
                    "\"RDFSnapshotRNTuple_update_same_name.root\". If you want to delete the original "
-                   "ntuple and write another, please set the 'fOverwriteIfExists' option to true in RSnapshotOptions.");
+                   "object and write another, please set the 'fOverwriteIfExists' option to true in RSnapshotOptions.");
    }
 
    opts.fOverwriteIfExists = true;
@@ -467,6 +556,37 @@ TEST(RDFSnapshotRNTuple, TDirectory)
    auto sdf = ROOT::RDataFrame("dir/ntuple", fileGuard.GetPath());
    std::vector<std::string> expected = {"x"};
    EXPECT_EQ(expected, sdf.GetColumnNames());
+}
+
+TEST(RDFSnapshotRNTuple, CardinalityColumns)
+{
+   FileRAII fileGuard{"RDFSnapshotRNTuple_cardinality_columns.root"};
+
+   {
+      auto model = ROOT::RNTupleModel::Create();
+
+      model->MakeField<std::vector<Electron>>("electron");
+
+      auto cardinalityFld = std::make_unique<ROOT::RField<ROOT::RNTupleCardinality<std::uint32_t>>>("nElectrons");
+      model->AddProjectedField(std::move(cardinalityFld), [](const std::string &) { return "electron"; });
+
+      auto writer = ROOT::RNTupleWriter::Recreate(std::move(model), "ntuple", fileGuard.GetPath());
+      auto electron = writer->GetModel().GetDefaultEntry().GetPtr<std::vector<Electron>>("electron");
+
+      for (unsigned i = 0; i < 5; ++i) {
+         *electron = {Electron{1.f * i}, Electron{2.f * i}, Electron{3.f * i}};
+         writer->Fill();
+      }
+   }
+
+   ROOT::RDF::RSnapshotOptions opts;
+   opts.fMode = "UPDATE";
+   opts.fOutputFormat = ROOT::RDF::ESnapshotOutputFormat::kRNTuple;
+   ROOT::RDataFrame df("ntuple", fileGuard.GetPath());
+   df.Snapshot("ntuple_snap", fileGuard.GetPath(), "", opts);
+
+   ROOT::RDataFrame sdf("ntuple_snap", fileGuard.GetPath());
+   EXPECT_EQ("std::uint32_t", sdf.GetColumnType("nElectrons"));
 }
 
 class RDFSnapshotRNTupleFromTTreeTest : public ::testing::Test {
@@ -564,7 +684,8 @@ protected:
 
       auto &descriptor = reader->GetDescriptor();
 
-      int nTopLevelFields = std::distance(descriptor.GetTopLevelFields().begin(), descriptor.GetTopLevelFields().end());
+      auto topLevelFieldsIterable = descriptor.GetTopLevelFields();
+      int nTopLevelFields = std::distance(topLevelFieldsIterable.begin(), topLevelFieldsIterable.end());
       EXPECT_EQ(9, nTopLevelFields);
       EXPECT_EQ("std::int32_t", descriptor.GetFieldDescriptor(descriptor.FindFieldId("x")).GetTypeName());
       EXPECT_EQ("float", descriptor.GetFieldDescriptor(descriptor.FindFieldId("pt")).GetTypeName());

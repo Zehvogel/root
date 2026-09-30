@@ -1,22 +1,19 @@
 #ifndef TMVA_SOFIE_ROPERATOR
 #define TMVA_SOFIE_ROPERATOR
 
-#include <vector>
-#include <memory>
-
 #include "TMVA/SOFIE_common.hxx"
-//#include "RModel.hxx"
 
+#include <ROOT/RSpan.hxx>
 
+#include <memory>
+#include <string>
+#include <vector>
 
-namespace TMVA{
-namespace Experimental{
-namespace SOFIE{
+namespace TMVA::Experimental::SOFIE {
 
 class RModel;
 
-class ROperator{
-
+class ROperator {
 
 public:
    virtual std::vector<std::string> GetBlasRoutines() { return {}; }
@@ -33,6 +30,9 @@ public:
    virtual std::string GenerateSessionMembersCode(std::string /*opName*/) { return ""; }
    virtual std::string Header() { return "";}
 
+   /// check if the output of the operator is Constant and is evaluated at initialization time
+   bool IsOutputConstant() const { return fIsOutputConstant; }
+
    //virtual void Forward_reference() = 0;
    //virtual void Forward_blas() = 0;
    virtual ~ROperator(){}
@@ -40,9 +40,8 @@ public:
 protected:
 
    const std::string SP = "   ";    ///< space used to correctly indent the generated C++ code
-   bool fUseSession = false;        ///< flag to identify if using the session class
    bool fIsOutputConstant = false;  ///< flag to identify if operator has a constant output (no need to generate code)
-   bool fIsOutputParamShape = false;     ///< flag to identify of the output represents a parametric shape (can be knwon at compile time)
+   bool fIsOutputParamShape = false;     ///< flag to identify of the output represents a parametric shape (can be known at compile time)
 
    mutable std::vector<std::string_view> fInputTensorNames;
    mutable std::vector<std::string_view> fOutputTensorNames;
@@ -58,11 +57,6 @@ public:
 
 };
 
-
-
-}//SOFIE
-}//Experimental
-}//TMVA
-
+} // namespace TMVA::Experimental::SOFIE
 
 #endif //TMVA_SOFIE_OPERATOR

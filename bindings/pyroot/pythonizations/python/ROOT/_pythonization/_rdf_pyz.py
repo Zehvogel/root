@@ -8,7 +8,9 @@
 # For the list of contributors see $ROOTSYS/README/CREDITS.                    #
 ################################################################################
 import re
+import textwrap
 import typing
+import warnings
 
 from .._numbadeclare import _NumbaDeclareDecorator
 
@@ -229,33 +231,6 @@ class FunctionJitter:
         return self.func_call
 
 
-def _convert_to_vector(args):
-    """
-    Converts a Python list of strings into an std::vector before passing such
-    argument to a Filter operation.
-    The purpose of this function is to workaround issue #10092 until there is
-    a proper fix in cppyy.
-    Arguments:
-        args: arguments passed to Filter, possibly including the list of column
-    names
-    Returns:
-        Tuple with arguments, possibly replacing a list of column names by a
-    vector
-    """
-
-    import ROOT
-
-    if not args or not isinstance(args[0], list):
-        return args
-
-    try:
-        v = ROOT.std.vector["std::string"](args[0])
-    except TypeError:
-        raise TypeError(f"The list of columns of a Filter operation can only contain strings. Please check: {args[0]}")
-
-    return (v, *args[1:])
-
-
 def remove_fn_name_from_signature(signature):
     """
     Removes the function name from a signature string.
@@ -320,12 +295,12 @@ def _get_cpp_signature(func, rdf, cols):
     """
     Gets the C++ signature of a cppyy callable.
     """
-    import cppyy
+    import ROOT
 
-    if isinstance(func, cppyy._backend.TemplateProxy):
+    if isinstance(func, ROOT._cppyy.types.Template):
         func = get_cpp_overload_from_templ_proxy(func, get_column_types(rdf, cols))
 
-    if not isinstance(func, cppyy._backend.CPPOverload):
+    if not isinstance(func, ROOT._cppyy.types.Function):
         raise TypeError(f"Expected a cppyy callable, got {type(func).__name__}")
 
     overload_types = func.func_overloads_types
@@ -337,13 +312,13 @@ def _to_std_function(func, rdf, cols):
     """
     Converts a cppyy callable to std::function.
     """
-    import cppyy
+    import ROOT
 
-    if not isinstance(func, cppyy._backend.CPPOverload) and not isinstance(func, cppyy._backend.TemplateProxy):
+    if not isinstance(func, ROOT._cppyy.types.Function) and not isinstance(func, ROOT._cppyy.types.Template):
         raise TypeError(f"Expected a cppyy callable, got {type(func).__name__}")
 
     signature = _get_cpp_signature(func, rdf, cols)
-    return cppyy.gbl.std.function(signature)
+    return ROOT.std.function(signature)
 
 
 def _handle_cpp_callables(func, original_template, *args, rdf=None, cols=None):
@@ -371,12 +346,11 @@ def _handle_cpp_callables(func, original_template, *args, rdf=None, cols=None):
         RDataFrame: RDataFrame node if `func` can be classified in one of the
     three cases above, None otherwise
     """
+    import ROOT
 
-    import cppyy
+    is_cpp_functor = lambda: isinstance(getattr(func, "__call__", None), ROOT._cppyy.types.Function)  # noqa E731
 
-    is_cpp_functor = lambda: isinstance(getattr(func, "__call__", None), cppyy._backend.CPPOverload)  # noqa E731
-
-    is_std_function = lambda: isinstance(getattr(func, "target_type", None), cppyy._backend.CPPOverload)  # noqa E731
+    is_std_function = lambda: isinstance(getattr(func, "target_type", None), ROOT._cppyy.types.Function)  # noqa E731
 
     # handle free functions
     if callable(func) and not is_cpp_functor() and not is_std_function():
@@ -390,6 +364,32 @@ def _handle_cpp_callables(func, original_template, *args, rdf=None, cols=None):
 
     if is_cpp_functor() or is_std_function():
         return original_template[type(func)](*args)
+
+
+class _WarnOnce:
+    called = False
+
+    @classmethod
+    def warn(cls):
+        if not cls.called:
+            msg = """
+                RDataFrame is implicitly calling numba to JIT compile your Python functions. This behaviour will be in the
+                future only opt-in. You can silence this warning and achieve the same behaviour by explicitly calling the
+                ROOT.Numba.Declare decorator on your Python function and pass a string expression to RDataFrame that calls
+                the same function, for example:
+
+                ```
+                @ROOT.Numba.Declare([input_type_1, input_type_2], ret_type)
+                def foo(x, y):
+                    return x + y
+                
+                df.Define("sum", "Numba::foo(x, y)")
+                ```
+                
+                See more details at https://root.cern/doc/master/classROOT_1_1RDataFrame.html#python
+            """
+            warnings.warn(textwrap.dedent(msg), FutureWarning)
+        cls.called = True
 
 
 def _PyFilter(rdf, callable_or_str, *args, extra_args={}):
@@ -460,10 +460,11 @@ def _PyFilter(rdf, callable_or_str, *args, extra_args={}):
                 f"Arguments should be ('list', 'str',) not ({type(args[0]).__name__, type(args[1]).__name__}."
             )
 
-    rdf_node = _handle_cpp_callables(func, rdf._OriginalFilter, func, *_convert_to_vector(args), rdf=rdf, cols=col_list)
+    rdf_node = _handle_cpp_callables(func, rdf._OriginalFilter, func, *args, rdf=rdf, cols=col_list)
     if rdf_node is not None:
         return rdf_node
 
+    _WarnOnce.warn()
     jitter = FunctionJitter(rdf)
     func.__annotations__["return"] = (
         "bool"  # return type for Filters is bool # Note: You can keep double and Filter still works.
@@ -523,6 +524,7 @@ def _PyDefine(rdf, col_name, callable_or_str, cols=[], extra_args={}):
     if rdf_node is not None:
         return rdf_node
 
+    _WarnOnce.warn()
     jitter = FunctionJitter(rdf)
     func_call = jitter.jit_function(func, cols, extra_args)
     return rdf._OriginalDefine(col_name, "Numba::" + func_call)

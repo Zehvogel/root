@@ -1,13 +1,13 @@
 // @(#)root/test:$Id$
 // Author: Peter Malzacher   19/06/99
 
-#ifndef __CINT__
-#include <Riostream.h>
+#ifndef __CLING__
 #include <TMath.h>
 #include <TVector3.h>
 #include <TLorentzVector.h>
 #include <TRotation.h>
 #include <TLorentzRotation.h>
+
 #include <cassert>
 #endif
 

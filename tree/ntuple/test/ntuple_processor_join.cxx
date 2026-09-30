@@ -97,7 +97,6 @@ TEST_F(RNTupleJoinProcessorTest, Aligned)
 
    for (auto idx : *proc) {
       EXPECT_EQ(idx + 1, proc->GetNEntriesProcessed());
-      EXPECT_EQ(idx, proc->GetCurrentEntryNumber());
 
       yExpected = {static_cast<float>(*i * 0.2), 3.14, static_cast<float>(*i * 1.3)};
       EXPECT_EQ(yExpected, *y);
@@ -121,6 +120,47 @@ TEST_F(RNTupleJoinProcessorTest, IdenticalFieldNames)
    }
 
    EXPECT_EQ(10, proc->GetNEntriesProcessed());
+}
+
+TEST(RNTupleJoinProcessor, NameConflict)
+{
+   FileRaii fileGuard("ntuple_processor_join_name_conflict.root");
+   {
+      auto model = RNTupleModel::Create();
+      auto fldStruct = model->MakeField<CustomStruct>("struct");
+
+      auto file = std::unique_ptr<TFile>(TFile::Open(fileGuard.GetPath().c_str(), "RECREATE"));
+      auto ntuple = RNTupleWriter::Append(std::move(model), "ntuple", *file);
+
+      for (unsigned i = 0; i < 5; ++i) {
+         fldStruct->a = i;
+         ntuple->Fill();
+      }
+   }
+   {
+      auto model = RNTupleModel::Create();
+      auto fldB = model->MakeField<float>("b");
+
+      auto file = std::unique_ptr<TFile>(TFile::Open(fileGuard.GetPath().c_str(), "UPDATE"));
+      auto ntuple = RNTupleWriter::Append(std::move(model), "struct", *file);
+
+      for (unsigned i = 0; i < 5; ++i) {
+         *fldB = i * 2;
+         ntuple->Fill();
+      }
+   }
+
+   auto proc = RNTupleProcessor::CreateJoin({"ntuple", fileGuard.GetPath()}, {"struct", fileGuard.GetPath()}, {});
+
+   try {
+      proc->RequestField<float>("struct.a");
+   } catch (const ROOT::RException &err) {
+      EXPECT_THAT(
+         err.what(),
+         testing::HasSubstr("ambiguous field name: \"struct.a\" is present in the primary RNTupleProcessor \"ntuple\", "
+                            "but may also refer to a field in the auxiliary RNTupleProcessor named \"struct\". To "
+                            "avoid this ambiguity, rename the auxiliary RNTupleProcessor."));
+   }
 }
 
 TEST_F(RNTupleJoinProcessorTest, UnalignedSingleJoinField)
@@ -193,9 +233,9 @@ TEST_F(RNTupleJoinProcessorTest, UnalignedMultipleJoinFields)
    auto a = proc->RequestField<float>("ntuple4.a");
 
    for (auto idx : *proc) {
-      EXPECT_EQ(proc->GetCurrentEntryNumber(), idx);
+      EXPECT_EQ(proc->GetNEntriesProcessed(), idx + 1);
 
-      EXPECT_FLOAT_EQ(proc->GetCurrentEntryNumber() * 2, *i);
+      EXPECT_FLOAT_EQ(idx * 2, *i);
       EXPECT_FLOAT_EQ(*i * 0.5f, *x);
       EXPECT_EQ(*i * 0.1f, *a);
    }

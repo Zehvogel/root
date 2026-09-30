@@ -22,6 +22,7 @@ set(LIBS
   clangCodeGen
   clangBasic
   clangEdit
+  clangInterpreter
 
   clingUtils
 )
@@ -37,6 +38,7 @@ set( LLVM_LINK_COMPONENTS
   object
   option
   orcjit
+  orcdebugging
   runtimedyld
   scalaropts
   support

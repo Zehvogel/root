@@ -40,7 +40,8 @@
 #include "TVirtualX.h"
 #include "TRegexp.h"
 #include "strlcpy.h"
-#include "snprintf.h"
+
+#include <cstdio>
 #include <memory>
 
 Int_t TGraphPainter::fgMaxPointsPerLine = 50;
@@ -3615,18 +3616,16 @@ void TGraphPainter::PaintGraphErrors(TGraph *theGraph, Option_t *option)
       x  = gPad->XtoPad(theX[i]);
       y  = gPad->YtoPad(theY[i]);
 
-      if (!option0) {
-         if (option3) {
-            if (x < gPad->GetUxmin()) x = gPad->GetUxmin();
-            if (x > gPad->GetUxmax()) x = gPad->GetUxmax();
-            if (y < gPad->GetUymin()) y = gPad->GetUymin();
-            if (y > gPad->GetUymax()) y = gPad->GetUymax();
-         } else {
-            if (x < gPad->GetUxmin()) continue;
-            if (x > gPad->GetUxmax()) continue;
-            if (y < gPad->GetUymin()) continue;
-            if (y > gPad->GetUymax()) continue;
-         }
+      // the error band ("3" and "4") is a filled polygon: it is cut off at the
+      // frame by the clipping of the pad (TGraph::kClipFrame, set by default),
+      // like the band of a "F" TGraph. Clamping its vertices to the user range
+      // here would move them, so that the shape of the band would change with
+      // the axis range, see https://github.com/root-project/root/issues/23491
+      if (!option0 && !option3) {
+         if (x < gPad->GetUxmin()) continue;
+         if (x > gPad->GetUxmax()) continue;
+         if (y < gPad->GetUymin()) continue;
+         if (y > gPad->GetUymax()) continue;
       }
       ex = theEX[i];
       ey = theEY[i];
@@ -3669,8 +3668,10 @@ void TGraphPainter::PaintGraphErrors(TGraph *theGraph, Option_t *option)
       }
       yup  = yup2;
       ylow = ylow2;
-      if (yup2  > gPad->GetUymax()) yup2  =  gPad->GetUymax();
-      if (ylow2 < gPad->GetUymin()) ylow2 =  gPad->GetUymin();
+      if (!option3) {
+         if (yup2  > gPad->GetUymax()) yup2  =  gPad->GetUymax();
+         if (ylow2 < gPad->GetUymin()) ylow2 =  gPad->GetUymin();
+      }
 
       //  draw the error rectangles
       if (option2) {
@@ -4474,13 +4475,14 @@ void TGraphPainter::PaintScatter(TScatter *theScatter, Option_t* chopt)
    }
 
    TH2F *h = theScatter->GetHistogram();
+   h->SetContour(gStyle->GetNumberOfColors()); // Ensure same number of divisions in underlying hist than in TScatter palette
    if (optionAxis) {
-      h->Paint(" ");
+      h->Paint("COL1"); // avoid h empty bins to be drawn as background if negative Z values in scatter plot
       if (h->GetMinimum() < h->GetMaximum()) {
          if (minc<h->GetMinimum()) minc = h->GetMinimum();
          if (maxc>h->GetMaximum()) maxc = h->GetMaximum();
       } else {
-         Error("PaintScatter", "Mininal (%g) and Maximal (%g) values of the internal histogram are not valid",h->GetMinimum(),h->GetMaximum());
+         Error("PaintScatter", "Minimal (%g) and Maximal (%g) values of the internal histogram are not valid",h->GetMinimum(),h->GetMaximum());
       }
 
       // Define and paint palette

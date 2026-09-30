@@ -1,5 +1,4 @@
 /// \file RNTupleDS.hxx
-/// \ingroup NTuple ROOT7
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \author Enrico Guiraud <enrico.guiraud@cern.ch>
 /// \date 2018-10-04
@@ -63,8 +62,17 @@ class RFieldBase;
 class RDataFrame;
 class RNTuple;
 } // namespace ROOT
+namespace ROOT::Detail::RDF {
+class RNodeBase;
+}
+namespace ROOT::RDF {
+template <typename T>
+class RInterface;
+}
 namespace ROOT::Internal::RDF {
 class RNTupleColumnReader;
+std::vector<std::pair<std::uint64_t, std::uint64_t>>
+GetDatasetGlobalClusterBoundaries(const ROOT::RDF::RInterface<ROOT::Detail::RDF::RNodeBase> &node);
 }
 namespace ROOT::Internal {
 class RPageSource;
@@ -126,6 +134,7 @@ class RNTupleDS final : public ROOT::RDF::RDataSource {
    std::unordered_map<ROOT::DescriptorId_t, std::string> fFieldId2QualifiedName;
    std::vector<std::string> fColumnNames;
    std::vector<std::string> fColumnTypes;
+   std::vector<std::string> fTopLevelFieldNames;
    /// List of column readers returned by GetColumnReaders() organized by slot. Used to reconnect readers
    /// to new page sources when the files in the chain change.
    std::vector<std::vector<ROOT::Internal::RDF::RNTupleColumnReader *>> fActiveColumnReaders;
@@ -206,6 +215,10 @@ class RNTupleDS final : public ROOT::RDF::RDataSource {
                                                             const std::vector<std::string> &fileNames,
                                                             const std::pair<ULong64_t, ULong64_t> &range);
 
+   // This function needs to acess private members fNTupleName and fFileNames
+   friend std::vector<std::pair<std::uint64_t, std::uint64_t>> ROOT::Internal::RDF::GetDatasetGlobalClusterBoundaries(
+      const ROOT::RDF::RInterface<ROOT::Detail::RDF::RNodeBase> &node);
+
    explicit RNTupleDS(std::string_view ntupleName, const std::vector<std::string> &fileNames,
                       const std::pair<ULong64_t, ULong64_t> &range);
 
@@ -222,6 +235,7 @@ public:
    void SetNSlots(unsigned int nSlots) final;
    std::size_t GetNFiles() const final { return fFileNames.empty() ? 1 : fFileNames.size(); }
    const std::vector<std::string> &GetColumnNames() const final { return fColumnNames; }
+   const std::vector<std::string> &GetTopLevelFieldNames() const final { return fTopLevelFieldNames; }
    bool HasColumn(std::string_view colName) const final;
    std::string GetTypeName(std::string_view colName) const final;
    std::vector<std::pair<ULong64_t, ULong64_t>> GetEntryRanges() final;

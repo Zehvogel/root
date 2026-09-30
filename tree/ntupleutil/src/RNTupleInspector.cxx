@@ -1,5 +1,4 @@
 /// \file RNTupleInspector.cxx
-/// \ingroup NTuple ROOT7
 /// \author Florine de Geus <florine.willemijn.de.geus@cern.ch>
 /// \date 2023-01-09
 /// \warning This is part of the ROOT 7 prototype! It will change without notice. It might trigger earthquakes. Feedback
@@ -18,7 +17,7 @@
 #include <ROOT/RPageStorageFile.hxx>
 #include <ROOT/RNTupleDescriptor.hxx>
 #include <ROOT/RNTupleInspector.hxx>
-#include <ROOT/RError.hxx>
+#include "ROOT/RNTupleUtils.hxx"
 
 #include <TFile.h>
 
@@ -26,6 +25,7 @@
 #include <cstring>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 
@@ -50,6 +50,12 @@ void ROOT::Experimental::RNTupleInspector::CollectColumnInfo()
    fCompressedSize = 0;
    fUncompressedSize = 0;
 
+   std::vector<DescriptorId_t> clusterIds;
+   for (const auto &cgDesc : fDescriptor.GetClusterGroupIterable()) {
+      R__ASSERT(cgDesc.HasClusterDetails());
+      clusterIds.insert(clusterIds.end(), cgDesc.GetClusterIds().begin(), cgDesc.GetClusterIds().end());
+   }
+
    for (const auto &colDesc : fDescriptor.GetColumnIterable()) {
       if (colDesc.IsAliasColumn())
          continue;
@@ -62,7 +68,8 @@ void ROOT::Experimental::RNTupleInspector::CollectColumnInfo()
       std::uint64_t nElems = 0;
       std::vector<std::uint64_t> compressedPageSizes{};
 
-      for (const auto &clusterDescriptor : fDescriptor.GetClusterIterable()) {
+      for (auto cid : clusterIds) {
+         const auto &clusterDescriptor = fDescriptor.GetClusterDescriptor(cid);
          if (!clusterDescriptor.ContainsColumn(colId)) {
             continue;
          }
@@ -74,7 +81,7 @@ void ROOT::Experimental::RNTupleInspector::CollectColumnInfo()
          nElems += columnRange.GetNElements();
 
          if (!fCompressionSettings && columnRange.GetCompressionSettings()) {
-            fCompressionSettings = *columnRange.GetCompressionSettings();
+            fCompressionSettings = columnRange.GetCompressionSettings();
          } else if (fCompressionSettings && columnRange.GetCompressionSettings() &&
                     (*fCompressionSettings != *columnRange.GetCompressionSettings())) {
             // Note that currently all clusters and columns are compressed with the same settings and it is not yet
@@ -266,21 +273,20 @@ void ROOT::Experimental::RNTupleInspector::PrintColumnTypeInfo(ENTupleInspectorP
       output << " column type    | count   | # elements  | compressed bytes | uncompressed bytes | compression ratio | "
                 "# pages \n"
              << "----------------|---------|-------------|------------------|--------------------|-------------------|-"
-                "------"
-             << std::endl;
+                "------\n";
       for (const auto &[colType, typeInfo] : colTypeInfo)
          output << std::setw(15) << RColumnElementBase::GetColumnTypeName(colType) << " |" << std::setw(8)
                 << typeInfo.count << " |" << std::setw(12) << typeInfo.nElems << " |" << std::setw(17)
                 << typeInfo.compressedSize << " |" << std::setw(19) << typeInfo.uncompressedSize << " |" << std::fixed
                 << std::setprecision(3) << std::setw(18) << typeInfo.GetCompressionFactor() << " |" << std::setw(6)
-                << typeInfo.nPages << " " << std::endl;
+                << typeInfo.nPages << " \n";
       break;
    case ENTupleInspectorPrintFormat::kCSV:
-      output << "columnType,count,nElements,compressedSize,uncompressedSize,compressionFactor,nPages" << std::endl;
+      output << "columnType,count,nElements,compressedSize,uncompressedSize,compressionFactor,nPages\n";
       for (const auto &[colType, typeInfo] : colTypeInfo) {
          output << RColumnElementBase::GetColumnTypeName(colType) << "," << typeInfo.count << "," << typeInfo.nElems
                 << "," << typeInfo.compressedSize << "," << typeInfo.uncompressedSize << "," << std::fixed
-                << std::setprecision(3) << typeInfo.GetCompressionFactor() << "," << typeInfo.nPages << std::endl;
+                << std::setprecision(3) << typeInfo.GetCompressionFactor() << "," << typeInfo.nPages << '\n';
       }
       break;
    default: R__ASSERT(false && "Invalid print format");
@@ -565,4 +571,279 @@ void ROOT::Experimental::RNTupleInspector::PrintFieldTreeAsDot(const ROOT::RFiel
    }
    if (isZeroField)
       output << "}";
+}
+
+namespace {
+
+struct SpeedscopeFrame {
+   std::string fString;
+   std::uint64_t fOpeningPosition = 0;
+   std::uint64_t fClosingPosition = 0;
+};
+
+static void PrintSpeedscopeFrames(const std::vector<SpeedscopeFrame> &frames, std::ostream &output)
+{
+   output << "{\n";
+   output << "   \"$schema\":\"https://www.speedscope.app/file-format-schema.json\",\n";
+   output << "   \"shared\":{\n";
+   output << "      \"frames\":[\n";
+
+   for (std::size_t i = 0; i < frames.size(); ++i) {
+      output << "         { \"name\":\"" << frames[i].fString << "\" }" << (i + 1 < frames.size() ? ",\n" : "\n");
+   }
+
+   output << "      ]\n";
+   output << "   },\n";
+   output << "   \"profiles\":[\n";
+   output << "      {\n";
+   output << "         \"type\":\"evented\",\n";
+   output << "         \"name\":\"Flattened Timeline\",\n";
+   output << "         \"unit\":\"bytes\",\n";
+   output << "         \"startValue\":0,\n";
+   output << "         \"endValue\":" << frames.back().fClosingPosition << ",\n";
+   output << "         \"events\":[\n";
+
+   bool first = true;
+
+   // Parameter idx Index of the frame being processed
+   // Parameter limit
+   //   - If the frame is not root: Closing Position of its father
+   //   - If the frame is root: Closing Position of the last element of frames
+   // Returns the next index to be processed
+   std::function<std::size_t(std::size_t, std::uint32_t)> processRecursive = [&](std::size_t nextIdxToProcess,
+                                                                                 std::uint32_t limit) -> std::size_t {
+      while (nextIdxToProcess < frames.size() && frames[nextIdxToProcess].fOpeningPosition < limit) {
+         const std::size_t currentIdx = nextIdxToProcess;
+
+         if (!first)
+            output << ",\n";
+
+         output << "            {\"type\":\"O\",\"frame\":" << currentIdx
+                << ",\"at\":" << frames[currentIdx].fOpeningPosition << "}";
+         first = false;
+
+         nextIdxToProcess = processRecursive(nextIdxToProcess + 1, frames[currentIdx].fClosingPosition);
+
+         output << ",\n            {\"type\":\"C\",\"frame\":" << currentIdx
+                << ",\"at\":" << frames[currentIdx].fClosingPosition << "}";
+      }
+      return nextIdxToProcess;
+   };
+
+   processRecursive(0, frames.back().fClosingPosition);
+
+   output << "\n         ]\n";
+   output << "      }\n";
+   output << "   ]\n";
+   output << "}\n";
+}
+} // namespace
+
+void ROOT::Experimental::RNTupleInspector::PrintSchemaProfile(std::ostream &output,
+                                                              [[maybe_unused]] ESchemaProfileFormat format) const
+{
+   // There is only one format at the moment
+   assert(format == ESchemaProfileFormat::kSpeedscopeJSON);
+
+   const auto &tupleDescriptor = GetDescriptor();
+   ROOT::DescriptorId_t rootId = tupleDescriptor.GetFieldZeroId();
+   const auto &rootFieldDescriptor = tupleDescriptor.GetFieldDescriptor(rootId);
+
+   std::vector<SpeedscopeFrame> frames;
+   std::uint64_t positionCursor = 0;
+
+   // Returns size of the visited field
+   auto visitFieldsRecursive = [&](auto &self, const ROOT::RFieldDescriptor &fieldDescriptor) -> std::size_t {
+      SpeedscopeFrame fieldSpeedscopeFrame;
+      fieldSpeedscopeFrame.fString =
+         tupleDescriptor.GetQualifiedFieldName(fieldDescriptor.GetId()) + " (" + fieldDescriptor.GetTypeName() + ")";
+      fieldSpeedscopeFrame.fOpeningPosition = positionCursor;
+      frames.push_back(fieldSpeedscopeFrame);
+
+      std::size_t fieldSpeedscopeFrameIndex = frames.size() - 1;
+
+      std::size_t subTreeSize = 0;
+      const auto &childIds = fieldDescriptor.GetLinkIds();
+
+      for (const auto &childFieldId : childIds) {
+         const auto &childFieldDescriptor = tupleDescriptor.GetFieldDescriptor(childFieldId);
+         subTreeSize += self(self, childFieldDescriptor);
+      }
+
+      for (const auto &columnDescriptor : tupleDescriptor.GetColumnIterable(fieldDescriptor.GetId())) {
+         const auto &columnInfo = GetColumnInspector(columnDescriptor.GetPhysicalId());
+         std::size_t columnSize = columnInfo.GetCompressedSize();
+
+         SpeedscopeFrame columnSpeedscopeFrame;
+         columnSpeedscopeFrame.fString =
+            "[col#" + std::to_string(columnDescriptor.GetPhysicalId()) + "] " +
+            tupleDescriptor.GetQualifiedFieldName(fieldDescriptor.GetId()) + " (" +
+            ROOT::Internal::RColumnElementBase::GetColumnTypeName(columnDescriptor.GetType()) + ")";
+         columnSpeedscopeFrame.fOpeningPosition = positionCursor;
+         positionCursor += columnSize;
+         columnSpeedscopeFrame.fClosingPosition = positionCursor;
+         frames.push_back(columnSpeedscopeFrame);
+         subTreeSize += columnSize;
+      }
+
+      frames[fieldSpeedscopeFrameIndex].fClosingPosition = positionCursor;
+
+      return subTreeSize;
+   };
+
+   const auto &topLevelIds = rootFieldDescriptor.GetLinkIds();
+   for (const auto &childId : topLevelIds) {
+      const auto &childFieldDescriptor = tupleDescriptor.GetFieldDescriptor(childId);
+      visitFieldsRecursive(visitFieldsRecursive, childFieldDescriptor);
+   }
+
+   PrintSpeedscopeFrames(frames, output);
+}
+
+void ROOT::Experimental::RNTupleInspector::PrintDiskProfile(std::ostream &output,
+                                                            [[maybe_unused]] ESchemaProfileFormat format) const
+{
+   // There is only one format at the moment
+   assert(format == ESchemaProfileFormat::kSpeedscopeJSON);
+
+   const auto *pageSourceFile = dynamic_cast<const ROOT::Internal::RPageSourceFile *>(fPageSource.get());
+   // GetAnchorFromFile() only supports file-based backend, so better to check early
+   if (!pageSourceFile)
+      throw RException(R__FAIL("Disk profile is only supported for file-based page sources"));
+   const auto anchor = ROOT::Internal::GetAnchorFromFile(*pageSourceFile);
+   if (!anchor)
+      R__LOG_WARNING(ROOT::Internal::NTupleLog()) << "Cannot retrieve RNTuple anchor";
+
+   const auto &descriptor = GetDescriptor();
+
+   struct RDiskPageLeaf {
+      std::uint64_t fPosition = 0;
+      std::uint64_t fSize = 0;
+      std::string fName;
+      std::array<DescriptorId_t, 3> fAncestors;
+   };
+   static constexpr std::array<const char *, 3> kAncestorsNames = {"cluster group", "cluster", "column range"};
+   std::vector<RDiskPageLeaf> pageLeaves;
+
+   // Collect all pageLeaves in whichever order the iterator provides
+   for (const auto &clusterGroupDescriptor : descriptor.GetClusterGroupIterable()) {
+      const auto groupId = clusterGroupDescriptor.GetId();
+
+      for (const auto clusterId : clusterGroupDescriptor.GetClusterIds()) {
+         const auto &clusterDescriptor = descriptor.GetClusterDescriptor(clusterId);
+
+         for (const auto &columnRange : clusterDescriptor.GetColumnRangeIterable()) {
+            const auto columnId = columnRange.GetPhysicalColumnId();
+
+            const auto &pageRange = clusterDescriptor.GetPageRange(columnId);
+            for (const auto &pageInfo : pageRange.GetPageInfos()) {
+               const auto &locator = pageInfo.GetLocator();
+
+               RDiskPageLeaf pageLeaf;
+               pageLeaf.fPosition = locator.GetPosition<std::uint64_t>();
+               pageLeaf.fSize = locator.GetNBytesOnStorage() +
+                                pageInfo.HasChecksum() * ROOT::Internal::RPageStorage::kNBytesPageChecksum;
+               pageLeaf.fName = "[page @" + std::to_string(pageLeaf.fPosition) + "]";
+               pageLeaf.fAncestors = {groupId, clusterId, columnId};
+               pageLeaves.push_back(pageLeaf);
+            }
+         }
+      }
+   }
+
+   // Sort pageLeafs by on-disk address
+   std::sort(pageLeaves.begin(), pageLeaves.end(),
+             [](const RDiskPageLeaf &a, const RDiskPageLeaf &b) { return a.fPosition < b.fPosition; });
+
+   // Remove aliases (the ntuple specification allows complete, but not partial, overlap between pages)
+   pageLeaves.erase(
+      std::unique(pageLeaves.begin(), pageLeaves.end(),
+                  [](const RDiskPageLeaf &a, const RDiskPageLeaf &b) { return a.fPosition == b.fPosition; }),
+      pageLeaves.end());
+
+   std::vector<SpeedscopeFrame> frames;
+
+   // Construct frame for ntuple header
+   if (anchor) {
+      SpeedscopeFrame headerFrame;
+      headerFrame.fString = "ntuple header";
+      headerFrame.fOpeningPosition = anchor->GetSeekHeader();
+      headerFrame.fClosingPosition = anchor->GetSeekHeader() + anchor->GetNBytesHeader();
+      frames.push_back(headerFrame);
+   }
+
+   struct ROpenFrame {
+      ROOT::DescriptorId_t fId = 0; // clusterGroup, cluster, columnRange id
+      std::size_t fIndex = 0;       // index in frames vector
+   };
+   std::vector<ROpenFrame> openFrames;
+   std::uint64_t previouspageLeafEnd = 0;
+
+   // Construct frames from the bottom (leafs ordered by disk address) upwards
+   for (const auto &pageLeaf : pageLeaves) {
+      std::size_t sharedDepth = 0;
+
+      // How many of the currently open ancestors does this pageLeaf share?
+      while (sharedDepth < openFrames.size() && sharedDepth < pageLeaf.fAncestors.size() &&
+             openFrames[sharedDepth].fId == pageLeaf.fAncestors[sharedDepth]) {
+         sharedDepth++;
+      }
+
+      // Close ancestors not shared with this pageLeaf (innermost first order)
+      while (openFrames.size() > sharedDepth) {
+         frames[openFrames.back().fIndex].fClosingPosition = previouspageLeafEnd;
+         openFrames.pop_back();
+      }
+
+      // Open the ancestors this pageLeaf needs (outermost first order)
+      for (std::size_t depth = sharedDepth; depth < pageLeaf.fAncestors.size(); ++depth) {
+         SpeedscopeFrame ancestorFrame;
+         ancestorFrame.fString =
+            "[" + std::string(kAncestorsNames[depth]) + " " + std::to_string(pageLeaf.fAncestors[depth]) + "]";
+         ancestorFrame.fOpeningPosition = pageLeaf.fPosition;
+         frames.push_back(ancestorFrame);
+
+         ROpenFrame openFrame;
+         openFrame.fId = pageLeaf.fAncestors[depth];
+         openFrame.fIndex = frames.size() - 1;
+         openFrames.push_back(openFrame);
+      }
+
+      // Emit the pageLeaf itself
+      SpeedscopeFrame pageLeafFrame;
+      pageLeafFrame.fString = pageLeaf.fName;
+      pageLeafFrame.fOpeningPosition = pageLeaf.fPosition;
+      pageLeafFrame.fClosingPosition = pageLeaf.fPosition + pageLeaf.fSize;
+      frames.push_back(pageLeafFrame);
+
+      previouspageLeafEnd = pageLeaf.fPosition + pageLeaf.fSize;
+   }
+
+   // Close whatever is still open after the last pageLeaf
+   while (!openFrames.empty()) {
+      frames[openFrames.back().fIndex].fClosingPosition = previouspageLeafEnd;
+      openFrames.pop_back();
+   }
+
+   // Construct frames for page lists
+   for (const auto &clusterGroupDescriptor : descriptor.GetClusterGroupIterable()) {
+      const auto locator = clusterGroupDescriptor.GetPageListLocator();
+
+      SpeedscopeFrame pageListFrame;
+      pageListFrame.fString = "[page list " + std::to_string(clusterGroupDescriptor.GetId()) + "]";
+      pageListFrame.fOpeningPosition = locator.GetPosition<std::uint64_t>();
+      pageListFrame.fClosingPosition = locator.GetPosition<std::uint64_t>() + locator.GetNBytesOnStorage();
+      frames.push_back(pageListFrame);
+   }
+
+   // Construct frame for ntuple footer
+   if (anchor) {
+      SpeedscopeFrame footerFrame;
+      footerFrame.fString = "ntuple footer";
+      footerFrame.fOpeningPosition = anchor->GetSeekFooter();
+      footerFrame.fClosingPosition = anchor->GetSeekFooter() + anchor->GetNBytesFooter();
+      frames.push_back(footerFrame);
+   }
+
+   PrintSpeedscopeFrames(frames, output);
 }

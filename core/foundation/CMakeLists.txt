@@ -10,10 +10,10 @@
 
 set_property(TARGET Core APPEND PROPERTY DICT_HEADERS
   ESTLType.h
-  RStringView.h
   TClassEdit.h
   TError.h
   ThreadLocalStorage.h
+  ROOT/BitUtils.hxx
   ROOT/RError.hxx
   ROOT/RLogger.hxx
   ROOT/RNotFn.hxx

@@ -52,6 +52,19 @@ bool HasAttrDirect(PyObject* pyclass, PyObject* pyname, bool mustBeCPyCppyy = fa
     return false;
 }
 
+bool HasAttrInMRO(PyObject *pyclass, PyObject *pyname)
+{
+   // Check base classes in the MRO (skipping the class itself) for a CPyCppyy overload.
+   PyObject *mro = ((PyTypeObject *)pyclass)->tp_mro;
+   if (mro && PyTuple_Check(mro)) {
+      for (Py_ssize_t i = 1; i < PyTuple_GET_SIZE(mro); ++i) {
+         if (HasAttrDirect(PyTuple_GET_ITEM(mro, i), pyname, /*mustBeCPyCppyy=*/true))
+            return true;
+      }
+   }
+   return false;
+}
+
 PyObject* GetAttrDirect(PyObject* pyclass, PyObject* pyname) {
 // get an attribute without causing getattr lookups
     PyObject* dct = PyObject_GetAttr(pyclass, PyStrings::gDict);
@@ -192,6 +205,26 @@ PyObject* DeRefGetAttr(PyObject* self, PyObject* name)
 }
 
 //-----------------------------------------------------------------------------
+PyObject *ValueGetAttr(PyObject *self, PyObject *name)
+{
+   // std::optional and std::expected require has_value() before operator*().
+   PyObject *has_value = PyObject_CallMethodNoArgs(self, PyStrings::gHasValue);
+   if (!has_value)
+      return nullptr;
+
+   const int contains_value = PyObject_IsTrue(has_value);
+   Py_DECREF(has_value);
+   if (contains_value < 0)
+      return nullptr;
+   if (!contains_value) {
+      PyErr_SetObject(PyExc_AttributeError, name);
+      return nullptr;
+   }
+
+   return DeRefGetAttr(self, name);
+}
+
+//-----------------------------------------------------------------------------
 PyObject* FollowGetAttr(PyObject* self, PyObject* name)
 {
 // Follow operator->() if present (available in python as __follow__), so that
@@ -312,6 +345,111 @@ static ItemGetter* GetGetter(PyObject* args)
     }
 
     return getter;
+}
+
+namespace {
+
+void compileSpanHelpers()
+{
+   static bool compiled = false;
+
+   if (compiled)
+      return;
+
+   compiled = true;
+
+   auto code = R"(
+namespace __cppyy_internal {
+
+template <class T>
+struct ptr_iterator {
+   T *cur;
+   T *end;
+
+   ptr_iterator(T *c, T *e) : cur(c), end(e) {}
+
+   T &operator*() const { return *cur; }
+   ptr_iterator &operator++()
+   {
+      ++cur;
+      return *this;
+   }
+   bool operator==(const ptr_iterator &other) const { return cur == other.cur; }
+   bool operator!=(const ptr_iterator &other) const { return !(*this == other); }
+};
+
+template <class T>
+ptr_iterator<T> make_iter(T *begin, T *end)
+{
+   return {begin, end};
+}
+
+} // namespace __cppyy_internal
+
+// Note: for const span<T>, T is const-qualified here
+template <class T>
+auto __cppyy_internal_begin(T &s) noexcept
+{
+   return __cppyy_internal::make_iter(s.data(), s.data() + s.size());
+}
+
+// Note: for const span<T>, T is const-qualified here
+template <class T>
+auto __cppyy_internal_end(T &s) noexcept
+{
+   // end iterator = begin iterator with cur == end
+   return __cppyy_internal::make_iter(s.data() + s.size(), s.data() + s.size());
+}
+    )";
+   Cppyy::Compile(code, /*silent*/ true);
+}
+
+PyObject *spanBegin()
+{
+   static PyObject *pyFunc = nullptr;
+   if (!pyFunc) {
+      compileSpanHelpers();
+      PyObject *py_ns = CPyCppyy::GetScopeProxy(Cppyy::gGlobalScope);
+      pyFunc = PyObject_GetAttrString(py_ns, "__cppyy_internal_begin");
+      if (!pyFunc) {
+         PyErr_Format(PyExc_RuntimeError, "cppyy internal error: failed to locate helper "
+                                          "'__cppyy_internal_begin' for std::span pythonization");
+      }
+   }
+   return pyFunc;
+}
+
+PyObject *spanEnd()
+{
+   static PyObject *pyFunc = nullptr;
+   if (!pyFunc) {
+      compileSpanHelpers();
+      PyObject *py_ns = CPyCppyy::GetScopeProxy(Cppyy::gGlobalScope);
+      pyFunc = PyObject_GetAttrString(py_ns, "__cppyy_internal_end");
+      if (!pyFunc) {
+         PyErr_Format(PyExc_RuntimeError, "cppyy internal error: failed to locate helper "
+                                          "'__cppyy_internal_end' for std::span pythonization");
+      }
+   }
+   return pyFunc;
+}
+
+} // namespace
+
+static PyObject *SpanBegin(PyObject *self, PyObject *)
+{
+   auto begin = spanBegin();
+   if (!begin)
+      return nullptr;
+   return PyObject_CallOneArg(begin, self);
+}
+
+static PyObject *SpanEnd(PyObject *self, PyObject *)
+{
+   auto end = spanEnd();
+   if (!end)
+      return nullptr;
+   return PyObject_CallOneArg(end, self);
 }
 
 static bool FillVector(PyObject* vecin, PyObject* args, ItemGetter* getter)
@@ -1635,9 +1773,15 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
 // prefer operator-> as that returns a pointer (which is simpler since it never
 // has to deal with ref-assignment), but operator* plays better with STL iters
 // and algorithms
-    if (HasAttrDirect(pyclass, PyStrings::gDeref) && !Cppyy::IsSmartPtr(klass->fCppType))
-        Utility::AddToClass(pyclass, "__getattr__", (PyCFunction)DeRefGetAttr, METH_O);
-    else if (HasAttrDirect(pyclass, PyStrings::gFollow) && !Cppyy::IsSmartPtr(klass->fCppType))
+// optional and expected use operator* to access a contained value, rather than
+// to provide pointer-like access to an object.
+   const bool has_value_semantics = IsTemplatedSTLClass(name, "optional") || IsTemplatedSTLClass(name, "expected");
+   if (HasAttrDirect(pyclass, PyStrings::gDeref) && !Cppyy::IsSmartPtr(klass->fCppType)) {
+      if (has_value_semantics)
+         Utility::AddToClass(pyclass, "__getattr__", (PyCFunction)ValueGetAttr, METH_O);
+      else
+         Utility::AddToClass(pyclass, "__getattr__", (PyCFunction)DeRefGetAttr, METH_O);
+   } else if (HasAttrDirect(pyclass, PyStrings::gFollow) && !Cppyy::IsSmartPtr(klass->fCppType))
         Utility::AddToClass(pyclass, "__getattr__", (PyCFunction)FollowGetAttr, METH_O);
 
 // for pre-check of nullptr for boolean types
@@ -1650,12 +1794,36 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
         Utility::AddToClass(pyclass, pybool_name, (PyCFunction)NullCheckBool, METH_NOARGS);
     }
 
-// for STL containers, and user classes modeled after them
-// the attribute must be a CPyCppyy overload, otherwise the check gives false
-// positives in the case where the class has a non-function attribute that is
-// called "size".
-    if (HasAttrDirect(pyclass, PyStrings::gSize, /*mustBeCPyCppyy=*/ true)) {
-        Utility::AddToClass(pyclass, "__len__", "size");
+    // for STL containers, and user classes modeled after them. Guard the alias to
+    // __len__ by verifying that size() returns an integer type and the class has
+    // begin()/end() or operator[] (i.e. is container-like). This prevents bool()
+    // returning False for valid objects whose size() returns non-integer types like
+    // std::optional<std::size_t>. Skip if size() has multiple overloads, as that
+    // indicates it is not the simple container-style size() one would map to __len__.
+    if (HasAttrDirect(pyclass, PyStrings::gSize, /*mustBeCPyCppyy=*/true) || HasAttrInMRO(pyclass, PyStrings::gSize)) {
+       bool sizeIsInteger = false;
+       PyObject *pySizeMethod = PyObject_GetAttr(pyclass, PyStrings::gSize);
+       if (pySizeMethod && CPPOverload_Check(pySizeMethod)) {
+          auto *ol = (CPPOverload *)pySizeMethod;
+          if (ol->HasMethods() && ol->fMethodInfo->fMethods.size() == 1) {
+             PyObject *pyrestype =
+                ol->fMethodInfo->fMethods[0]->Reflex(Cppyy::Reflex::RETURN_TYPE, Cppyy::Reflex::AS_STRING);
+             if (pyrestype) {
+                sizeIsInteger = Cppyy::IsIntegerType(CPyCppyy_PyText_AsString(pyrestype));
+                Py_DECREF(pyrestype);
+             }
+          }
+       }
+       Py_XDECREF(pySizeMethod);
+
+       if (sizeIsInteger) {
+          bool hasIterators = (HasAttrDirect(pyclass, PyStrings::gBegin) || HasAttrInMRO(pyclass, PyStrings::gBegin)) &&
+                              (HasAttrDirect(pyclass, PyStrings::gEnd) || HasAttrInMRO(pyclass, PyStrings::gEnd));
+          bool hasSubscript = HasAttrDirect(pyclass, PyStrings::gGetItem) || HasAttrInMRO(pyclass, PyStrings::gGetItem);
+          if (hasIterators || hasSubscript) {
+             Utility::AddToClass(pyclass, "__len__", "size");
+          }
+       }
     }
 
     if (HasAttrDirect(pyclass, PyStrings::gContains)) {
@@ -1766,7 +1934,7 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
 
             std::ostringstream initdef;
             initdef << "namespace __cppyy_internal {\n"
-                    << "void init_" << rname << "(" << name << "*& self";
+                    << "void init_" << rname << "(" << name << "** self";
             bool codegen_ok = true;
             std::vector<std::string> arg_types, arg_names, arg_defaults;
             arg_types.reserve(ndata); arg_names.reserve(ndata); arg_defaults.reserve(ndata);
@@ -1804,7 +1972,7 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
                     initdef << ", " << arg_types[i] << " " << arg_names[i];
                     if (defaults_ok) initdef << " = " << arg_defaults[i];
                 }
-                initdef << ") {\n  self = new " << name << "{";
+                initdef << ") {\n  *self = new " << name << "{";
                 for (std::vector<std::string>::size_type i = 0; i < arg_names.size(); ++i) {
                     if (i != 0) initdef << ", ";
                     initdef << arg_names[i];
@@ -1826,6 +1994,21 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
 
 
 //- class name based pythonization -------------------------------------------
+
+    if (IsTemplatedSTLClass(name, "span")) {
+    // libstdc++ (GCC >= 15) implements std::span::iterator using a private
+    // nested tag type, which makes the iterator non-instantiable by
+    // CallFunc-generated wrappers (the return type cannot be named without
+    // violating access rules).
+    //
+    // To preserve correct Python iteration semantics, we replace begin()/end()
+    // for std::span to return a custom pointer-based iterator instead. This
+    // avoids relying on std::span::iterator while still providing a real C++
+    // iterator object that CPyCppyy can also wrap and expose via
+    // __iter__/__next__.
+        Utility::AddToClass(pyclass, "begin", (PyCFunction)SpanBegin, METH_NOARGS);
+        Utility::AddToClass(pyclass, "end", (PyCFunction)SpanEnd, METH_NOARGS);
+    }
 
     if (IsTemplatedSTLClass(name, "vector")) {
 
@@ -1963,7 +2146,14 @@ bool CPyCppyy::Pythonize(PyObject* pyclass, const std::string& name)
         Utility::AddToClass(pyclass, "__str__",   (PyCFunction)STLViewStringStr,        METH_NOARGS);
     }
 
-    else if (name == "basic_string<wchar_t,char_traits<wchar_t>,allocator<wchar_t> >" || name == "std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t> >") {
+// The first condition was already present in upstream CPyCppyy. The other two
+// are special to ROOT, because its reflection layer gives us the types without
+// the "std::" namespace. On some platforms, that applies only to the template
+// arguments, and on others also to the "basic_string".
+    else if (name == "std::basic_string<wchar_t,std::char_traits<wchar_t>,std::allocator<wchar_t> >"
+          || name == "basic_string<wchar_t,char_traits<wchar_t>,allocator<wchar_t> >"
+          || name == "std::basic_string<wchar_t,char_traits<wchar_t>,allocator<wchar_t> >"
+    ) {
         Utility::AddToClass(pyclass, "__repr__",  (PyCFunction)STLWStringRepr,       METH_NOARGS);
         Utility::AddToClass(pyclass, "__str__",   (PyCFunction)STLWStringStr,        METH_NOARGS);
         Utility::AddToClass(pyclass, "__bytes__", (PyCFunction)STLWStringBytes,      METH_NOARGS);

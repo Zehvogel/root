@@ -27,6 +27,7 @@ struct ASImage;
 struct ASVisual;
 class TBrowser;
 class THashTable;
+class TTFhandle;
 
 class TASImage : public TImage {
 
@@ -47,10 +48,11 @@ private:
    inline Int_t Idx(Int_t idx);
    void FillRectangleInternal(UInt_t col, Int_t x, Int_t y, UInt_t width, UInt_t height);
    void DrawTextTTF(Int_t x, Int_t y, const char *text, Int_t size, UInt_t color, const char *font_name, Float_t angle);
-   void DrawGlyph(void *bitmap, UInt_t color, Int_t x, Int_t y);
+   void DrawFTGlyphs(TTFhandle &ttf, UInt_t color, Int_t x, Int_t y, TVirtualPad *clippad = nullptr, Int_t offx = 0, Int_t offy = 0);
    void SetDefaults();
    void CreateThumbnail();
    void DestroyImage();
+   void DestroyScaledImage();
    const char *TypeFromMagicNumber(const char *file);
 
 protected:
@@ -71,12 +73,14 @@ protected:
 
    static ASVisual *fgVisual;      ///< pointer to visual structure
    static Bool_t    fgInit;        ///< global flag to init afterimage only once
+   static Bool_t    fgBatch;       ///< global flag to signal if batch mode is active ie fgVisual->dpy was set to nullptr
 
    EImageFileTypes GetFileType(const char *ext);
    void MapFileTypes(EImageFileTypes &type, UInt_t &astype, Bool_t toas = kTRUE);
    void MapQuality(EImageQuality &quality, UInt_t &asquality, Bool_t toas = kTRUE);
 
    static Bool_t InitVisual();
+   Bool_t InitImage(const char *caller);
 
 public:
    TASImage();
@@ -89,7 +93,7 @@ public:
    TASImage &operator=(const TASImage &img);
    ~TASImage() override;
 
-   TObject *Clone(const char *newname) const override;
+   TObject *Clone(const char *newname = "") const override;
 
    void  SetEditable(Bool_t on = kTRUE) override { fEditable = on; }             //*TOGGLE*
    Bool_t IsEditable() const override { return fEditable; }
@@ -136,6 +140,7 @@ public:
                   const char *color = nullptr, const char *font = "fixed", EText3DType type = TImage::kPlain,
                   const char *fore_file = nullptr, Float_t angle = 0) override;
    void DrawText(TText *text, Int_t x = 0, Int_t y = 0) override;
+   void DrawTextOnPad(TText *text, Int_t x = 0, Int_t y = 0, TVirtualPad *pad = nullptr, Int_t offx = 0, Int_t  offy = 0) override;
 
    // Vector graphics
    void  BeginPaint(Bool_t fast = kTRUE) override;

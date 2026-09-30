@@ -16,8 +16,9 @@
 #include <RooAbsPdf.h>
 #include <RooRealProxy.h>
 
-namespace RooFit {
-namespace Detail {
+#include <array>
+
+namespace RooFit::Detail {
 
 class RooNormalizedPdf : public RooAbsPdf {
 public:
@@ -51,16 +52,15 @@ public:
 
    bool forceAnalyticalInt(const RooAbsArg & /*dep*/) const override { return true; }
    /// Forward determination of analytical integration capabilities to input p.d.f
-   Int_t getAnalyticalIntegralWN(RooArgSet &allVars, RooArgSet &analVars, const RooArgSet * /*normSet*/,
+   Int_t getAnalyticalIntegralWN(RooArgSet &allVars, RooArgSet &analVars, const RooArgSet *normSet,
                                  const char *rangeName = nullptr) const override
    {
-      return _pdf->getAnalyticalIntegralWN(allVars, analVars, &_normSet, rangeName);
+      return _pdf->getAnalyticalIntegralWN(allVars, analVars, normSet ? normSet : &_normSet, rangeName);
    }
    /// Forward calculation of analytical integrals to input p.d.f
-   double
-   analyticalIntegralWN(Int_t code, const RooArgSet * /*normSet*/, const char *rangeName = nullptr) const override
+   double analyticalIntegralWN(Int_t code, const RooArgSet *normSet, const char *rangeName = nullptr) const override
    {
-      return _pdf->analyticalIntegralWN(code, &_normSet, rangeName);
+      return _pdf->analyticalIntegralWN(code, normSet ? normSet : &_normSet, rangeName);
    }
 
    ExtendMode extendMode() const override { return static_cast<RooAbsPdf &>(*_pdf).extendMode(); }
@@ -84,20 +84,24 @@ protected:
       // still need it to support printing of the object.
       return getValV(nullptr);
    }
-   double getValV(const RooArgSet * /*normSet*/) const override
-   {
-      return normalizeWithNaNPacking(_pdf->getVal(), _normIntegral->getVal());
-   };
+   double getValV(const RooArgSet * normSet) const override;
 
 private:
+   void logEvalErrorCounts() const;
+
    RooTemplateProxy<RooAbsPdf> _pdf;
    RooRealProxy _normIntegral;
    RooArgSet _normSet;
 
+   /// Evaluation error counters, filled by the compute function. In CUDA
+   /// mode, they are read back from the GPU asynchronously and only arrive
+   /// after the evaluation of the computation graph, so they have to live in
+   /// a member and not on the stack of doEval(). Transient and not copied.
+   mutable std::array<double, 3> _evalErrorCounts{}; //<!
+
    ClassDefOverride(RooFit::Detail::RooNormalizedPdf, 0);
 };
 
-} // namespace Detail
-} // namespace RooFit
+} // namespace RooFit::Detail
 
 #endif

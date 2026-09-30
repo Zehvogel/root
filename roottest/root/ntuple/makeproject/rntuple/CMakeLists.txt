@@ -51,19 +51,24 @@ ROOTTEST_GENERATE_EXECUTABLE(
 target_include_directories(read_rntuple PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_directories(read_rntuple PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/librntuplestltest)
 
+if(MSVC)
+  set(_env ENVIRONMENT PATH=${CMAKE_CURRENT_BINARY_DIR}/librntuplestltest)
+endif()
+
 # Need to also explicitly set the LD_LIBRARY_PATH (at least on MacOS), so that
 # the generated library with the custom class can be loaded by the read test.
-# Setting the value of ${ld_library_path} in the ENVIRONMENT argument of the
-# ROOTTEST_ADD_TEST function will not work, because that function sets the same
-# variable internally, thus overriding our choice. The simplest thing to do is
-# to append our directory to the ${ROOTTEST_ENV_LIBRARYPATH} contents, which
-# are automatically used by ROOTTEST_ADD_TEST
-set(_roottest_env_librarypath ${ROOTTEST_ENV_LIBRARYPATH})
-set(ROOTTEST_ENV_LIBRARYPATH "${ROOTTEST_ENV_LIBRARYPATH}:${CMAKE_CURRENT_BINARY_DIR}/librntuplestltest")
 ROOTTEST_ADD_TEST(read_rntuple
                   EXEC ./read_rntuple
                   FIXTURES_REQUIRED read_rntuple_executable
-                  # PATH is used on Windows to find libraries for loading
-                  ENVIRONMENT PATH=${CMAKE_CURRENT_BINARY_DIR}/librntuplestltest)
-set(ROOTTEST_ENV_LIBRARYPATH ${_roottest_env_librarypath})
+                  ${_env})
 
+# Use RPATH instead of LD_LIBRARY_PATH so we don't have to change environment
+# variables in the build environment.
+if(NOT MSVC)
+  if(APPLE)
+    set(new_rpath "@loader_path/librntuplestltest")
+  else()
+    set(new_rpath "$ORIGIN/librntuplestltest")
+  endif()
+  set_property(TARGET read_rntuple APPEND PROPERTY BUILD_RPATH "${new_rpath}")
+endif()

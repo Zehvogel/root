@@ -31,7 +31,6 @@ ROOT_STANDARD_LIBRARY_PACKAGE(TMVA
     TMVA/BinaryTree.h
     TMVA/CCPruner.h
     TMVA/CCTreeWrapper.h
-    TMVA/Classification.h
     TMVA/ClassifierFactory.h
     TMVA/ClassInfo.h
     TMVA/Config.h
@@ -222,7 +221,6 @@ ROOT_STANDARD_LIBRARY_PACKAGE(TMVA
     src/BinaryTree.cxx
     src/CCPruner.cxx
     src/CCTreeWrapper.cxx
-    src/Classification.cxx
     src/ClassifierFactory.cxx
     src/ClassInfo.cxx
     src/Config.cxx
@@ -409,10 +407,7 @@ if(vdt OR builtin_vdt)
 endif()
 
 if(tmva-cpu)
-  target_include_directories(TMVA PRIVATE ${TBB_INCLUDE_DIRS})
-  target_link_libraries(TMVA PRIVATE ${TBB_LIBRARIES})
-  set_target_properties(TMVA PROPERTIES COMPILE_FLAGS "${TBB_CXXFLAGS}")
-  target_link_libraries(TMVA PRIVATE ROOT::BLAS)
+  target_link_libraries(TMVA PRIVATE TBB::tbb ROOT::BLAS)
 endif()
 
 if(tmva-gpu)
@@ -437,16 +432,10 @@ if(dataframe)
 ROOT_STANDARD_LIBRARY_PACKAGE(TMVAUtils
   NO_INSTALL_HEADERS
   HEADERS
-  TMVA/RTensorUtils.hxx
-  TMVA/RStandardScaler.hxx
   TMVA/RReader.hxx
   TMVA/RInferenceUtils.hxx
   TMVA/RBDT.hxx
   TMVA/RSofieReader.hxx
-  TMVA/BatchGenerator/RBatchGenerator.hxx
-  TMVA/BatchGenerator/RBatchLoader.hxx
-  TMVA/BatchGenerator/RChunkLoader.hxx
-  TMVA/BatchGenerator/RChunkConstructor.hxx
 
   SOURCES
 
@@ -462,6 +451,8 @@ ROOT_STANDARD_LIBRARY_PACKAGE(TMVAUtils
 
   ${EXTRA_DICT_OPTS}
 )
+# RBDT::LoadXGBoost parses the XGBoost native JSON serialization.
+target_link_libraries(TMVAUtils PRIVATE nlohmann_json::nlohmann_json)
 endif()
 
 ROOT_ADD_TEST_SUBDIRECTORY(test)

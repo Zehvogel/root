@@ -1,10 +1,9 @@
-import py, sys, pytest, os
+import sys, pytest, os
 from pytest import mark, raises, skip
 from support import setup_make, pylong, pyunicode, IS_WINDOWS, ispypy
 
 
-currpath = os.getcwd()
-test_dct = currpath + "/libdatatypesDict"
+test_dct = "datatypes_cxx"
 
 
 class TestLOWLEVEL:
@@ -104,7 +103,6 @@ class TestLOWLEVEL:
         ptrptr = cppyy.ll.as_ctypes(s, byref=True)
         assert pycasts.get_deref(ptrptr) == actual
 
-    @mark.xfail()
     def test05_array_as_ref(self):
         """Use arrays for pass-by-ref"""
 
@@ -134,7 +132,7 @@ class TestLOWLEVEL:
         f = array('f', [0]);     ctd.set_float_r(f);  assert f[0] ==  5.
         f = array('d', [0]);     ctd.set_double_r(f); assert f[0] == -5.
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test06_ctypes_as_ref_and_ptr(self):
         """Use ctypes for pass-by-ref/ptr"""
 
@@ -376,6 +374,7 @@ class TestLOWLEVEL:
         with raises(TypeError):
             cppyy.gbl.ArrayOfCStrings.takes_array_of_cstrings(pyargs, len(pyargs))
 
+    @mark.xfail(run=False, condition=IS_WINDOWS, reason="Windows fatal exception: access violation")
     def test11_array_of_const_char_ref(self):
         """Test passting of const char**&"""
 
@@ -490,7 +489,7 @@ class TestLOWLEVEL:
         assert cppyy.gbl.std.vector[cppyy.gbl.std.vector[int]].value_type == 'std::vector<int>'
         assert cppyy.gbl.std.vector['int[1]'].value_type == 'int[1]'
 
-    @mark.xfail()
+    @mark.xfail(strict=True)
     def test15_templated_arrays_gmpxx(self):
         """Use of gmpxx array types in templates"""
 
@@ -513,6 +512,24 @@ class TestLOWLEVEL:
 
         g = cppyy.gbl
         assert g.test15_templated_arrays_gmpxx.vector.value_type[g.std.vector[g.mpz_class]]
+
+    def test16_empy_llview_as_argument(self):
+        """Verify that empty LowLevelViews from nullptr can be used for C++
+        function calls. This covers the problem that was reported in
+        https://github.com/root-project/root/issues/20687.
+        """
+        import cppyy
+
+        cppyy.cppdef("""
+        int *getCStyleArray() { return nullptr; }
+        void takeCStyleArray(int *arr) {}
+        """)
+
+        ll_view = cppyy.gbl.getCStyleArray()
+
+        assert(len(ll_view) == 0)
+
+        cppyy.gbl.takeCStyleArray(ll_view)
 
 
 class TestMULTIDIMARRAYS:
@@ -544,7 +561,6 @@ class TestMULTIDIMARRAYS:
     def _data_m(self, lbl):
         return [('m_'+tp.replace(' ', '_')+lbl, tp) for tp in self.numeric_builtin_types]
 
-    @mark.xfail()
     def test01_2D_arrays(self):
         """Access and use of 2D data members"""
 
@@ -587,7 +603,6 @@ class TestMULTIDIMARRAYS:
                     assert arr[i][j] == val
                     assert arr[i, j] == val
 
-    @mark.xfail()
     def test02_assign_2D_arrays(self):
         """Direct assignment of 2D arrays"""
 
@@ -640,7 +655,6 @@ class TestMULTIDIMARRAYS:
             arr[2][3] = 10
             assert arr[2][3] == 10
 
-    @mark.xfail()
     def test03_3D_arrays(self):
         """Access and use of 3D data members"""
 
@@ -746,6 +760,43 @@ class TestMULTIDIMARRAYS:
         for i, v in enumerate(("s1", "s23", "s456")):
             assert len(ns.str_array[i]) == 7
             assert ns.str_array[i].as_string() == v
+
+    def test06_fixed_multidim_array_itemsize(self):
+        """conversion of fixed-length array low level views into NumPy arrays"""
+        import cppyy
+
+        try:
+            import numpy as np
+        except ImportError:
+            skip("numpy is not installed")
+
+        cases = [
+            ("float", np.float32, (3, 5)),
+            ("int", np.intc, (2, 6)),
+            ("short", np.short, (5, 3)),
+            ("unsigned char", np.ubyte, (4, 4)),
+            ("int32_t", np.int32, (2, 8)),
+            ("uint16_t", np.uint16, (7, 3)),
+        ]
+
+        for cpp_type, np_dtype, (rows, cols) in cases:
+            tag = cpp_type.replace(" ", "_")
+            cppyy.cppdef(f"""
+                struct cpp_arr_{tag} {{
+                    {cpp_type} a[{rows}][{cols}];
+                }};
+            """)
+            s = getattr(cppyy.gbl, f"cpp_arr_{tag}")()
+
+            itemsize = np.dtype(np_dtype).itemsize
+            mv = memoryview(s.a)
+            assert mv.ndim == 2
+            assert mv.shape == (rows, cols)
+            assert mv.itemsize == itemsize
+            assert mv.strides == (cols * itemsize, itemsize)
+
+            arr = np.array(s.a, dtype=np_dtype)
+            assert arr.shape == (rows, cols)
 
 
 if __name__ == "__main__":

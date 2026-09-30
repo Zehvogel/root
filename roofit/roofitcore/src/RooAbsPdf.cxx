@@ -210,6 +210,15 @@ inline double getLog(double prob, RooAbsReal const *caller)
    return std::log(prob);
 }
 
+void replaceOrAdd(RooLinkedList &lst, TObject &obj)
+{
+   TObject *old = lst.FindObject(obj.GetName());
+   if (old)
+      lst.Replace(old, &obj);
+   else
+      lst.Add(&obj);
+}
+
 } // namespace
 
 using std::endl, std::string, std::ostream, std::vector, std::pair, std::make_pair;
@@ -277,34 +286,6 @@ RooAbsPdf::~RooAbsPdf()
 }
 
 
-double RooAbsPdf::normalizeWithNaNPacking(double rawVal, double normVal) const {
-
-    if (normVal < 0. || (normVal == 0. && rawVal != 0)) {
-      //Unreasonable normalisations. A zero integral can be tolerated if the function vanishes, though.
-      const std::string msg = "p.d.f normalization integral is zero or negative: " + std::to_string(normVal);
-      logEvalError(msg.c_str());
-      clearValueAndShapeDirty();
-      return RooNaNPacker::packFloatIntoNaN(-normVal + (rawVal < 0. ? -rawVal : 0.));
-    }
-
-    if (rawVal < 0.) {
-       std::stringstream ss;
-       ss << "p.d.f value is less than zero (" << rawVal << "), trying to recover";
-       logEvalError(ss.str().c_str());
-       clearValueAndShapeDirty();
-       return RooNaNPacker::packFloatIntoNaN(-rawVal);
-    }
-
-    if (TMath::IsNaN(rawVal)) {
-      logEvalError("p.d.f value is Not-a-Number");
-      clearValueAndShapeDirty();
-      return rawVal;
-    }
-
-    return (rawVal == 0. && normVal == 0.) ? 0. : rawVal / normVal;
-}
-
-
 ////////////////////////////////////////////////////////////////////////////////
 /// Return current value, normalized by integrating over
 /// the observables in `nset`. If `nset` is 0, the unnormalized value
@@ -345,7 +326,7 @@ double RooAbsPdf::getValV(const RooArgSet* nset) const
     // Evaluate denominator
     const double normVal = _norm->getVal();
 
-    _value = normalizeWithNaNPacking(rawVal, normVal);
+    _value = RooFit::Detail::normalizeWithNaNPacking(*this, rawVal, normVal);
 
     clearValueAndShapeDirty();
   }
@@ -478,103 +459,107 @@ const RooAbsReal* RooAbsPdf::getNormObj(const RooArgSet* nset, const RooArgSet* 
 /// For functions that declare to be self-normalized by overloading the
 /// selfNormalized() function, a unit normalization is always constructed.
 
-bool RooAbsPdf::syncNormalization(const RooArgSet* nset, bool adjustProxies) const
+bool RooAbsPdf::syncNormalization(const RooArgSet *nset, bool adjustProxies) const
 {
-  setActiveNormSet(nset);
+   setActiveNormSet(nset);
 
-  // Check if data sets are identical
-  CacheElem* cache = static_cast<CacheElem*>(_normMgr.getObj(nset)) ;
-  if (cache) {
+   // Check if data sets are identical
+   CacheElem *cache = static_cast<CacheElem *>(_normMgr.getObj(nset));
+   if (cache) {
 
-    bool nintChanged = (_norm!=cache->_norm.get()) ;
-    _norm = cache->_norm.get();
+      bool nintChanged = (_norm != cache->_norm.get());
+      _norm = cache->_norm.get();
 
-    // In the past, this condition read `if (nintChanged && adjustProxies)`.
-    // However, the cache checks if the nset was already cached **by content**,
-    // and not by RooArgSet instance! So it can happen that the normalization
-    // set object is different, but the integral object is the same, in which
-    // case it would be wrong to not adjust the proxies. They always have to be
-    // adjusted when the nset changed, which is always the case when
-    // `syncNormalization()` is called.
-    if (adjustProxies) {
-      // Update dataset pointers of proxies
-      const_cast<RooAbsPdf*>(this)->setProxyNormSet(nset) ;
-    }
-
-    return nintChanged ;
-  }
-
-  // Update dataset pointers of proxies
-  if (adjustProxies) {
-    const_cast<RooAbsPdf*>(this)->setProxyNormSet(nset) ;
-  }
-
-  RooArgSet depList;
-  getObservables(nset, depList);
-
-  if (_verboseEval>0) {
-    if (!selfNormalized()) {
-      cxcoutD(Tracing) << ClassName() << "::syncNormalization(" << GetName()
-      << ") recreating normalization integral " << std::endl ;
-      depList.printStream(ccoutD(Tracing),kName|kValue|kArgs,kSingleLine) ;
-    } else {
-      cxcoutD(Tracing) << ClassName() << "::syncNormalization(" << GetName() << ") selfNormalized, creating unit norm" << std::endl;
-    }
-  }
-
-  // Destroy old normalization & create new
-  if (selfNormalized() || !dependsOn(depList)) {
-    auto ntitle = std::string(GetTitle()) + " Unit Normalization";
-    auto nname = std::string(GetName()) + "_UnitNorm";
-    _norm = new RooRealVar(nname.c_str(),ntitle.c_str(),1) ;
-  } else {
-    const char* nr = (_normRangeOverride.Length()>0 ? _normRangeOverride.Data() : (_normRange.Length()>0 ? _normRange.Data() : nullptr)) ;
-
-//     std::cout << "RooAbsPdf::syncNormalization(" << GetName() << ") rangeName for normalization is " << (nr?nr:"<null>") << std::endl ;
-    RooAbsReal* normInt;
-    {
-      // Normalization is always over all pdf components. Overriding the global
-      // component selection temporarily makes all RooRealIntegrals created during
-      // that time always include all components.
-      GlobalSelectComponentRAII selCompRAII(true);
-      normInt = std::unique_ptr<RooAbsReal>{createIntegral(depList,*getIntegratorConfig(),nr)}.release();
-    }
-    static_cast<RooRealIntegral*>(normInt)->setAllowComponentSelection(false);
-    normInt->getVal() ;
-//     std::cout << "resulting normInt = " << normInt->GetName() << std::endl ;
-
-    const char* cacheParamsStr = getStringAttribute("CACHEPARAMINT") ;
-    if (cacheParamsStr && strlen(cacheParamsStr)) {
-
-      std::unique_ptr<RooArgSet> intParams{normInt->getVariables()} ;
-
-      RooArgSet cacheParams = RooHelpers::selectFromArgSet(*intParams, cacheParamsStr);
-
-      if (!cacheParams.empty()) {
-   cxcoutD(Caching) << "RooAbsReal::createIntObj(" << GetName() << ") INFO: constructing " << cacheParams.size()
-          << "-dim value cache for integral over " << depList << " as a function of " << cacheParams << " in range " << (nr?nr:"<default>") <<  std::endl ;
-   std::string name = normInt->GetName() + ("_CACHE_[" + cacheParams.contentsString()) + "]";
-   RooCachedReal* cachedIntegral = new RooCachedReal(name.c_str(),name.c_str(),*normInt,cacheParams) ;
-   cachedIntegral->setInterpolationOrder(2) ;
-   cachedIntegral->addOwnedComponents(*normInt) ;
-   cachedIntegral->setCacheSource(true) ;
-   if (normInt->operMode()==ADirty) {
-     cachedIntegral->setOperMode(ADirty) ;
-   }
-   normInt= cachedIntegral ;
+      // In the past, this condition read `if (nintChanged && adjustProxies)`.
+      // However, the cache checks if the nset was already cached **by content**,
+      // and not by RooArgSet instance! So it can happen that the normalization
+      // set object is different, but the integral object is the same, in which
+      // case it would be wrong to not adjust the proxies. They always have to be
+      // adjusted when the nset changed, which is always the case when
+      // `syncNormalization()` is called.
+      if (adjustProxies) {
+         // Update dataset pointers of proxies
+         const_cast<RooAbsPdf *>(this)->setProxyNormSet(nset);
       }
 
-    }
-    _norm = normInt ;
-  }
+      return nintChanged;
+   }
 
-  // Register new normalization with manager (takes ownership)
-  cache = new CacheElem(*_norm) ;
-  _normMgr.setObj(nset,cache) ;
+   // Update dataset pointers of proxies
+   if (adjustProxies) {
+      const_cast<RooAbsPdf *>(this)->setProxyNormSet(nset);
+   }
 
-//   std::cout << "making new object " << _norm->GetName() << std::endl ;
+   RooArgSet depList;
+   getObservables(nset, depList);
 
-  return true ;
+   if (_verboseEval > 0) {
+      if (!selfNormalized()) {
+         cxcoutD(Tracing) << ClassName() << "::syncNormalization(" << GetName()
+                          << ") recreating normalization integral " << std::endl;
+         depList.printStream(ccoutD(Tracing), kName | kValue | kArgs, kSingleLine);
+      } else {
+         cxcoutD(Tracing) << ClassName() << "::syncNormalization(" << GetName()
+                          << ") selfNormalized, creating unit norm" << std::endl;
+      }
+   }
+
+   // Destroy old normalization & create new
+   if (selfNormalized() || depList.empty()) {
+      auto ntitle = std::string(GetTitle()) + " Unit Normalization";
+      auto nname = std::string(GetName()) + "_UnitNorm";
+      _norm = new RooRealVar(nname.c_str(), ntitle.c_str(), 1);
+   } else {
+      const char *nr = (_normRangeOverride.Length() > 0 ? _normRangeOverride.Data()
+                                                        : (_normRange.Length() > 0 ? _normRange.Data() : nullptr));
+
+      //     std::cout << "RooAbsPdf::syncNormalization(" << GetName() << ") rangeName for normalization is " <<
+      //     (nr?nr:"<null>") << std::endl ;
+      RooAbsReal *normInt;
+      {
+         // Normalization is always over all pdf components. Overriding the global
+         // component selection temporarily makes all RooRealIntegrals created during
+         // that time always include all components.
+         GlobalSelectComponentRAII selCompRAII(true);
+         normInt = std::unique_ptr<RooAbsReal>{createIntegral(depList, *getIntegratorConfig(), nr)}.release();
+      }
+      static_cast<RooRealIntegral *>(normInt)->setAllowComponentSelection(false);
+      normInt->getVal();
+      //     std::cout << "resulting normInt = " << normInt->GetName() << std::endl ;
+
+      const char *cacheParamsStr = getStringAttribute("CACHEPARAMINT");
+      if (cacheParamsStr && strlen(cacheParamsStr)) {
+
+         std::unique_ptr<RooArgSet> intParams{normInt->getVariables()};
+
+         RooArgSet cacheParams = RooHelpers::selectFromArgSet(*intParams, cacheParamsStr);
+
+         if (!cacheParams.empty()) {
+            cxcoutD(Caching) << "RooAbsReal::createIntObj(" << GetName() << ") INFO: constructing "
+                             << cacheParams.size() << "-dim value cache for integral over " << depList
+                             << " as a function of " << cacheParams << " in range " << (nr ? nr : "<default>")
+                             << std::endl;
+            std::string name = normInt->GetName() + ("_CACHE_[" + cacheParams.contentsString()) + "]";
+            RooCachedReal *cachedIntegral = new RooCachedReal(name.c_str(), name.c_str(), *normInt, cacheParams);
+            cachedIntegral->setInterpolationOrder(2);
+            cachedIntegral->addOwnedComponents(*normInt);
+            cachedIntegral->setCacheSource(true);
+            if (normInt->operMode() == ADirty) {
+               cachedIntegral->setOperMode(ADirty);
+            }
+            normInt = cachedIntegral;
+         }
+      }
+      _norm = normInt;
+   }
+
+   // Register new normalization with manager (takes ownership)
+   cache = new CacheElem(*_norm);
+   _normMgr.setObj(nset, cache);
+
+   //   std::cout << "making new object " << _norm->GetName() << std::endl ;
+
+   return true;
 }
 
 
@@ -871,7 +856,9 @@ double RooAbsPdf::extendedTerm(RooAbsData const& data, bool weightSquared, bool 
  *                          This backend re-uses code from the **cpu** backend, but compiled in CUDA kernels.
  *                          Hence, the results are expected to be identical, modulo some numerical differences that can arise from the different order in which the GPU is summing the log probabilities.
  *                          This backend can drastically speed up the fit if all RooAbsArg object in the model support it.
- *   <tr><td> **legacy** <td> The original likelihood evaluation method.
+ *   <tr><td> **legacy** <td> \deprecated The original likelihood evaluation method.
+ *                            It is deprecated and will be removed in ROOT 6.44, together with the deprecated BatchMode() command argument
+ *                            (where the legacy backend corresponded to `BatchMode("off")`).
  *                            Evaluates the PDF for each single data entry at a time before summing the negative log probabilities.
  *                            It supports multi-threading, but you might need more than 20 threads to maybe see about 10% performance gain over the default cpu-backend (that runs currently only on a single thread).
  *   <tr><td> **codegen** <td> **Experimental** - Generates and compiles minimal C++ code for the NLL on-the-fly and wraps it in the returned RooAbsReal.
@@ -882,7 +869,6 @@ double RooAbsPdf::extendedTerm(RooAbsData const& data, bool weightSquared, bool 
  *   <tr><td> **codegen_no_grad** <td> **Experimental** - Same as **codegen**, but doesn't generate and compile the gradient code and use the regular numerical differentiation instead.
  *                                     This is expected to be slower, but useful for debugging problems with the analytic gradient.
  *   </table>
- * <tr><td> `Optimize(bool flag)`           <td> Activate constant term optimization (on by default)
  * <tr><td> `SplitRange(bool flag)`         <td> Use separate fit ranges in a simultaneous fit. Actual range name for each subsample is assumed to
  *                                               be `rangeName_indexState`, where `indexState` is the state of the master index category of the simultaneous fit.
  * Using `Range("range"), SplitRange()` as switches, different ranges could be set like this:
@@ -930,11 +916,9 @@ double RooAbsPdf::extendedTerm(RooAbsData const& data, bool weightSquared, bool 
  *                                                 - precision = 0: Activate bin integration only for continuous PDFs fit to a RooDataHist.
  *                                                 - precision < 0: Deactivate.
  *                                                 \see RooBinSamplingPdf
- * <tr><td> `ModularL(bool flag)`           <td>  Enable or disable modular likelihoods, which will become the default in a future release.
- *                                                This does not change any user-facing code, but only enables a different likelihood class in the back-end. Note that this
- *                                                should be set to true for parallel minimization of likelihoods!
- *                                                Note that it is currently not recommended to use Modular likelihoods without any parallelization enabled in the minimization, since
- *                                                some features such as offsetting might not yet work in this case.
+ * <tr><td> `ModularL(bool flag)`           <td>  Enables usage of a modular likelihood class in the back-end that is required for the **experimental** parallel minimization of likelihoods.
+ *                                                Note that it is currently *not recommended* to use Modular likelihoods without any parallelization enabled in the minimization,
+ *                                                since many features do not work (for example some ranged fits, offsetting, external constraints, or conditional pdfs).
  * </table>
  */
 
@@ -993,7 +977,6 @@ std::unique_ptr<RooAbsReal> RooAbsPdf::createNLLImpl(RooAbsData &data, const Roo
  *   </table>
  *
  * <tr><td> `InitialHesse(bool flag)`       <td>  Flag controls if HESSE before MIGRAD as well, off by default
- * <tr><td> `Optimize(bool flag)`           <td>  Activate constant term optimization of test statistic during minimization (on by default)
  * <tr><td> `Hesse(bool flag)`              <td>  Flag controls if HESSE is run after MIGRAD, on by default
  * <tr><td> `Minos(bool flag)`              <td>  Flag controls if MINOS is run after HESSE, off by default
  * <tr><td> `Minos(const RooArgSet& set)`     <td>  Only run MINOS on given subset of arguments
@@ -1057,12 +1040,13 @@ std::unique_ptr<RooAbsReal> RooAbsPdf::createNLLImpl(RooAbsData &data, const Roo
  *                                                                                                      The second argument determines the internal partial derivative calculation
  *                                                                                                      ordering strategy. The third argument determines the number of partial
  *                                                                                                      derivatives that are executed per task package on each worker.
- * <tr><td> `ParallelDescentOptions(bool enable=false, int splitStrategy=0, int numSplits=4)`   <td>  **Experimental** - Control settings related to the parallelization of likelihoods
+ * <tr><td> `ParallelDescentOptions(bool enable=false, int splitStrategy=0, int numSplits=0)`   <td>  **Experimental** - Control settings related to the parallelization of likelihoods
  *                                                                                                      outside of the gradient calculation but in the minimization, most prominently
  *                                                                                                      in the linesearch step. The first argument this disables or enables likelihood
- *                                                                                                      parallelization. The second argument determines whether to split the task batches
- *                                                                                                      per event or per likelihood component. And the third argument how many events or
- *                                                                                                      respectively components to include in each batch.
+ *                                                                                                      parallelization. The second argument determines whether to split the tasks in
+ *                                                                                                      blocks of events (0) or per likelihood component (1). And the third argument
+ *                                                                                                      determines into how many tasks to split the likelihood, where the default of
+ *                                                                                                      zero keeps the automatic task-splitting settings of `RooFit::MultiProcess`.
  * <tr><td> `TimingAnalysis(bool flag)`   <td> **Experimental** - Log timings. This feature logs timings with NewStyle likelihoods on multiple processes simultaneously
  *                                         and outputs the timings at the end of a run to json log files, which can be analyzed with the
  *                                         `RooFit::MultiProcess::HeatmapAnalyzer`. Only works with simultaneous likelihoods.
@@ -1191,7 +1175,7 @@ RooAbsGenContext* RooAbsPdf::autoGenContext(const RooArgSet &vars, const RooData
 ///       as binned generation is always executed at the top-level node for a regular
 ///       PDF, so for those it only mattes that the top-level node is tagged.
 ///
-/// <tr><td> ProtoData(const RooDataSet& data, bool randOrder)
+/// <tr><td> ProtoData(const RooAbsData& data, bool randOrder)
 ///          <td> Use specified dataset as prototype dataset. If randOrder in ProtoData() is set to true,
 ///               the order of the events in the dataset will be read in a random order if the requested
 ///               number of events to be generated does not match the number of events in the prototype dataset.
@@ -1714,26 +1698,27 @@ RooFit::OwningPtr<RooDataHist> RooAbsPdf::generateBinned(const RooArgSet &whatVa
   Int_t histOutSum(0) ;
   for (int i=0 ; i<hist->numEntries() ; i++) {
     hist->get(i) ;
+    const double wi = hist->weight(i) ;
     if (expectedData) {
 
       // Expected data, multiply p.d.f by nEvents
-      double w=hist->weight()*nEvents ;
+      double w=wi*nEvents ;
       hist->set(i, w, sqrt(w));
 
     } else if (extended) {
 
       // Extended mode, set contents to Poisson(pdf*nEvents)
-      double w = RooRandom::randomGenerator()->Poisson(hist->weight()*nEvents) ;
-      hist->set(w,sqrt(w)) ;
+      double w = RooRandom::randomGenerator()->Poisson(wi*nEvents) ;
+      hist->set(i, w, sqrt(w)) ;
 
     } else {
 
       // Regular mode, fill array of weights with Poisson(pdf*nEvents), but to not fill
       // histogram yet.
-      if (hist->weight()>histMax) {
-        histMax = hist->weight() ;
+      if (wi>histMax) {
+        histMax = wi ;
       }
-      histOut[i] = RooRandom::randomGenerator()->Poisson(hist->weight()*nEvents) ;
+      histOut[i] = RooRandom::randomGenerator()->Poisson(wi*nEvents) ;
       histOutSum += histOut[i] ;
     }
   }
@@ -1756,7 +1741,7 @@ RooFit::OwningPtr<RooDataHist> RooAbsPdf::generateBinned(const RooArgSet &whatVa
       hist->get(ibinRand) ;
       double ranY = RooRandom::randomGenerator()->Uniform(histMax) ;
 
-      if (ranY<hist->weight()) {
+      if (ranY<hist->weight(ibinRand)) {
         if (wgt==1) {
           histOut[ibinRand]++ ;
         } else {
@@ -1779,8 +1764,7 @@ RooFit::OwningPtr<RooDataHist> RooAbsPdf::generateBinned(const RooArgSet &whatVa
 
     // Transfer working array to histogram
     for (int i=0 ; i<hist->numEntries() ; i++) {
-      hist->get(i) ;
-      hist->set(histOut[i],sqrt(1.0*histOut[i])) ;
+      hist->set(i, histOut[i], sqrt(1.0*histOut[i])) ;
     }
 
   } else if (expectedData) {
@@ -1790,8 +1774,8 @@ RooFit::OwningPtr<RooDataHist> RooAbsPdf::generateBinned(const RooArgSet &whatVa
     // bin average and bin integral in sampling bins
     double corr = nEvents/hist->sumEntries() ;
     for (int i=0 ; i<hist->numEntries() ; i++) {
-      hist->get(i) ;
-      hist->set(hist->weight()*corr,sqrt(hist->weight()*corr)) ;
+      const double wnew = hist->weight(i)*corr ;
+      hist->set(i, wnew, sqrt(wnew)) ;
     }
 
   }
@@ -2173,7 +2157,7 @@ RooPlot* RooAbsPdf::plotOn(RooPlot* frame, RooLinkedList& cmdList) const
   // Append overriding scale factor command at end of original command list
   RooCmdArg tmp = RooFit::Normalization(scaleFactor,Raw) ;
   tmp.setInt(1,1) ; // Flag this normalization command as created for internal use (so that VisualizeError can strip it)
-  cmdList.Add(&tmp) ;
+  replaceOrAdd(cmdList, tmp);
 
   // Was a component selected requested
   if (haveCompSel) {
@@ -2801,12 +2785,9 @@ RooAbsPdf::compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileCo
 
    auto newArg = std::make_unique<RooFit::Detail::RooNormalizedPdf>(*pdfClone, normSet);
 
-   // The direct servers are this pdf and the normalization integral, which
-   // don't need to be compiled further.
-   for (RooAbsArg *server : newArg->servers()) {
-      ctx.markAsCompiled(*server);
-   }
-   ctx.markAsCompiled(*newArg);
+   // The direct servers are the cloned pdf (already compiled above) and the
+   // freshly-built normalization integral. Neither needs further compilation.
+   ctx.markSubtreeAsCompiled(*newArg);
    newArg->addOwnedComponents(std::move(pdfClone));
    return newArg;
 }

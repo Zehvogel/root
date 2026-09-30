@@ -1,31 +1,12 @@
 #include "ntuple_test.hxx"
 
 #include "ntuple_fork.hxx"
+#include "ntuple_test_evolution.hxx"
 
 #include <TInterpreter.h>
 
 #include <string>
 #include <string_view>
-
-namespace {
-
-void EvaluateIntImpl(const char *expression, int *value)
-{
-   auto interpreterValue = gInterpreter->MakeInterpreterValue();
-   ASSERT_TRUE(gInterpreter->Evaluate(expression, *interpreterValue));
-   *value = interpreterValue->GetAsLong();
-}
-
-#define EXPECT_EVALUATE_EQ(expression, expected) \
-   do {                                          \
-      int _value;                                \
-      EvaluateIntImpl(expression, &_value);      \
-      if (::testing::Test::HasFatalFailure())    \
-         return;                                 \
-      EXPECT_EQ(expected, _value);               \
-   } while (0)
-
-} // namespace
 
 TEST(RNTupleEvolution, AddedMember)
 {
@@ -133,6 +114,8 @@ TEST(RNTupleEvolution, AddedMemberObject)
 {
    FileRaii fileGuard("test_ntuple_evolution_added_member_object.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -158,16 +141,6 @@ struct AddedMemberObject {
       ProcessLine("ptrAddedMemberObject->fMember1.fInt = 71;");
       ProcessLine("ptrAddedMemberObject->fMember3.fInt = 93;");
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for members).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -380,6 +353,8 @@ TEST(RNTupleEvolution, RenamedMemberClass)
    // RNTuple currently does not support automatic schema evolution when a class is renamed.
    FileRaii fileGuard("test_ntuple_evolution_renamed_member_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -398,16 +373,6 @@ struct RenamedMemberClass {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for members).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -475,6 +440,8 @@ TEST(RNTupleEvolution, AddedBaseClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_added_base_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -499,16 +466,6 @@ struct AddedBaseDerived : public AddedBaseIntermediate {
       ProcessLine("ptrAddedBaseDerived->fIntermediate = 82;");
       ProcessLine("ptrAddedBaseDerived->fDerived = 93;");
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -544,6 +501,8 @@ TEST(RNTupleEvolution, AddedSecondBaseClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_added_second_base_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -568,16 +527,6 @@ struct AddedSecondBaseDerived : public AddedSecondBaseFirst {
       ProcessLine("ptrAddedSecondBaseDerived->fFirstBase = 71;");
       ProcessLine("ptrAddedSecondBaseDerived->fDerived = 93;");
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -607,6 +556,8 @@ TEST(RNTupleEvolution, PrependSecondBaseClass)
    // automatically evolve this case, even if the member fields and on-disk columns are compatible.
    FileRaii fileGuard("test_ntuple_evolution_prepend_second_base_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -625,16 +576,6 @@ struct PrependSecondBaseDerived : public PrependSecondBaseFirst {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -662,6 +603,8 @@ TEST(RNTupleEvolution, AddedIntermediateClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_added_intermediate_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -680,16 +623,6 @@ struct AddedIntermediateDerived : public AddedIntermediateBase {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -716,6 +649,8 @@ struct AddedIntermediateDerived : public AddedIntermediate {
 TEST(RNTupleEvolution, RemovedBaseClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_removed_base_class.root");
+
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
 
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
@@ -745,16 +680,6 @@ struct RemovedBaseDerived : public RemovedBaseIntermediate {
       ProcessLine("ptrRemovedBaseDerived->fIntermediate = 82;");
       ProcessLine("ptrRemovedBaseDerived->fDerived = 93;");
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -785,6 +710,8 @@ TEST(RNTupleEvolution, RemovedIntermediateClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_removed_intermediate_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -806,16 +733,6 @@ struct RemovedIntermediateDerived : public RemovedIntermediate {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -840,6 +757,8 @@ TEST(RNTupleEvolution, RemovedSecondBaseClass)
 {
    FileRaii fileGuard("test_ntuple_evolution_removed_second_base_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -861,16 +780,6 @@ struct RemovedSecondBaseDerived : public RemovedSecondBaseFirst, public RemovedS
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -896,6 +805,8 @@ TEST(RNTupleEvolution, RenamedBaseClass)
    // RNTuple currently does not support automatic schema evolution when a class is renamed.
    FileRaii fileGuard("test_ntuple_evolution_renamed_base_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -914,16 +825,6 @@ struct RenamedBaseDerived : public RenamedBase1 {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(
@@ -949,6 +850,8 @@ TEST(RNTupleEvolution, RenamedIntermediateClass)
    // RNTuple currently does not support automatic schema evolution when a class is renamed.
    FileRaii fileGuard("test_ntuple_evolution_renamed_intermediate_class.root");
 
+   EXPECT_NO_STREAMER_OR_DICTIONARY();
+
    ExecInFork([&] {
       // The child process writes the file and exits, but the file must be preserved to be read by the parent.
       fileGuard.PreserveFile();
@@ -970,16 +873,6 @@ struct RenamedIntermediateDerived : public RenamedIntermediate1 {
 
       auto writer = RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
       writer->Fill();
-
-      // Reset / close the writer and flush the file.
-      {
-         // TStreamerInfo::Build will report a warning for interpreted classes (but only for base classes).
-         // See also https://github.com/root-project/root/issues/9371
-         ROOT::TestSupport::CheckDiagsRAII diagRAII;
-         diagRAII.optionalDiag(kWarning, "TStreamerInfo::Build", "has no streamer or dictionary",
-                               /*matchFullMessage=*/false);
-         writer.reset();
-      }
    });
 
    ASSERT_TRUE(gInterpreter->Declare(R"(

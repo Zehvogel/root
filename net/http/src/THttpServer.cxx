@@ -40,55 +40,28 @@
 #include <thread>
 
 class THttpTimer : public TTimer {
-   Long_t fNormalTmout{0};
-   Bool_t fSlow{kFALSE};
-   Int_t fSlowCnt{0};
 
 public:
    THttpServer &fServer; ///!< server processing requests
 
    /// constructor
-   THttpTimer(Long_t milliSec, Bool_t mode, THttpServer &serv) : TTimer(milliSec, mode), fNormalTmout(milliSec), fServer(serv) {}
+   THttpTimer(Long_t milliSec, Bool_t mode, THttpServer &serv) : TTimer(milliSec, mode), fServer(serv) {}
 
-   void SetSlow(Bool_t flag)
-   {
-      fSlow = flag;
-      fSlowCnt = 0;
-      Long_t ms = fNormalTmout;
-      if (fSlow) {
-         if (ms < 100)
-            ms = 500;
-         else if (ms < 500)
-            ms = 3000;
-         else
-            ms = 10000;
-      }
-
-      SetTime(ms);
-   }
-   Bool_t IsSlow() const { return fSlow; }
 
    /// timeout handler
    /// used to process http requests in main ROOT thread
    void Timeout() override
    {
-      Int_t nprocess = fServer.ProcessRequests();
-
-      if (nprocess > 0) {
-         fSlowCnt = 0;
-         if (IsSlow())
-            SetSlow(kFALSE);
-      } else if (!IsSlow() && (fSlowCnt++ > 10)) {
-           SetSlow(kTRUE);
-      }
+      fServer.ProcessRequests();
    }
 };
 
-
-/** \class THttpServer
-\ingroup http
-
-Online http server for arbitrary ROOT application
+/**
+\class THttpServer
+\brief Online http server for arbitrary ROOT application
+\note This class provides HTTP access to ROOT objects. The user is entirely responsible for the security of the server.
+It is strongly recommended to use the server only within an isolated network
+or to enable proper authentication to prevent unauthorized remote access.
 
 Idea of THttpServer - provide remote http access to running
 ROOT application and enable HTML/JavaScript user interface.
@@ -133,6 +106,7 @@ More information: https://root.cern/root/htmldoc/guides/HttpServer/HttpServer.ht
 /// at once, separating them with semicolon (";"). Following engines are supported:
 ///
 ///     http     - TCivetweb, civetweb-based implementation of http protocol
+///     socket   - TCivetweb bound to unix socket
 ///     fastcgi  - TFastCgi, special protocol for communicating with web servers
 ///
 /// For each created engine one should provide socket port number like "http:8080" or "fastcgi:9000".
@@ -304,6 +278,31 @@ void THttpServer::SetReadOnly(Bool_t readonly)
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+/// Returns true if server accept object content in POST reequests
+
+Bool_t THttpServer::IsAllowPostObject() const
+{
+   return fSniffer ? fSniffer->IsAllowPostObject() : kFALSE;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// Set flag to allow receive and desereilize objects in POST requests
+///
+/// When object methods are executed via exe.json request,
+/// one can supply object as binary/json/xml in the body of POST request
+/// To allow creation of such object, one need to enable this flag
+/// Use of exe.json only possible in not-readonly mode
+///
+/// CAUTION! This is sensitive functionality and therefore should be
+/// used only when server not exposed to publicaly-accessed netowork.
+
+void THttpServer::SetAllowPostObject(Bool_t allow_post_obj)
+{
+   if (fSniffer)
+      fSniffer->SetAllowPostObject(allow_post_obj);
+}
+
+////////////////////////////////////////////////////////////////////////////////
 /// returns true if only websockets are handled by the server
 ///
 /// Typically used by WebGui
@@ -349,8 +348,8 @@ void THttpServer::AddLocation(const char *prefix, const char *path)
 ///
 /// One could specify address like:
 ///
-/// * https://root.cern/js/7.6.0/
-/// * https://jsroot.gsi.de/7.6.0/
+/// * https://root.cern/js/7.11.0/
+/// * https://jsroot.gsi.de/7.11.0/
 ///
 /// This allows to get new JSROOT features with old server,
 /// reduce load on THttpServer instance, also startup time can be improved
@@ -413,6 +412,8 @@ void THttpServer::SetDrawPage(const std::string &filename)
 ///     serv->CreateEngine("http:8080");
 ///     serv->CreateEngine("civetweb:8080");
 ///     serv->CreateEngine(":8080");
+///     // creates civetweb web server bound with unix socket
+///     serv->CreateEngine("socket:/home/user/server.socket?socket_mode=0700");
 ///     // creates fastcgi server with port 9000
 ///     serv->CreateEngine("fastcgi:9000");
 ///
@@ -655,9 +656,6 @@ Bool_t THttpServer::ExecuteHttp(std::shared_ptr<THttpCallArg> arg)
 
       return kTRUE;
    }
-
-   if (fTimer && fTimer->IsSlow())
-      fTimer->SetSlow(kFALSE);
 
    // add call arg to the list
    std::unique_lock<std::mutex> lk(fMutex);
@@ -1170,9 +1168,8 @@ void THttpServer::ProcessRequest(std::shared_ptr<THttpCallArg> arg)
       if (arg->fContent.empty())
          arg->Set404();
    } else if ((filename == "h.xml") || (filename == "get.xml")) {
-
-      Bool_t compact = arg->fQuery.Index("compact") != kNPOS;
-
+      Bool_t compact = arg->fQuery.Index("compact") != kNPOS,
+             processed = kFALSE;
       TString res;
 
       res.Form("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
@@ -1183,20 +1180,22 @@ void THttpServer::ProcessRequest(std::shared_ptr<THttpCallArg> arg)
          res.Append("\n");
       {
          TRootSnifferStoreXml store(res, compact);
-
+         auto len0 = res.Length();
          const char *topname = fTopName.Data();
          if (arg->fTopName.Length() > 0)
             topname = arg->fTopName.Data();
          fSniffer->ScanHierarchy(topname, arg->fPathName.Data(), &store, filename == "get.xml");
+         processed = res.Length() > len0;
       }
 
       res.Append("</root>");
       if (!compact)
          res.Append("\n");
-
-      arg->SetContent(std::string(res.Data()));
-
-      arg->SetXml();
+      if (processed) {
+         arg->SetContent(std::string(res.Data()));
+         arg->SetXml();
+      } else
+         MissedRequest(arg.get());
    } else if (filename == "h.json") {
       TString res;
       TRootSnifferStoreJson store(res, arg->fQuery.Index("compact") != kNPOS);
@@ -1204,8 +1203,12 @@ void THttpServer::ProcessRequest(std::shared_ptr<THttpCallArg> arg)
       if (arg->fTopName.Length() > 0)
          topname = arg->fTopName.Data();
       fSniffer->ScanHierarchy(topname, arg->fPathName.Data(), &store);
-      arg->SetContent(std::string(res.Data()));
-      arg->SetJson();
+
+      if (res.Length() > 0) {
+         arg->SetContent(std::string(res.Data()));
+         arg->SetJson();
+      } else
+         MissedRequest(arg.get());
    } else if (fSniffer->Produce(arg->fPathName.Data(), filename.Data(), arg->fQuery.Data(), arg->fContent)) {
       // define content type base on extension
       arg->SetContentType(GetMimeType(filename.Data()));
@@ -1317,9 +1320,6 @@ Bool_t THttpServer::ExecuteWS(std::shared_ptr<THttpCallArg> &arg, Bool_t externa
 
    if (external_thrd && (!handler || !handler->AllowMTProcess())) {
 
-      if (fTimer && fTimer->IsSlow())
-         fTimer->SetSlow(kFALSE);
-
       std::unique_lock<std::mutex> lk(fMutex);
       fArgs.push(arg);
       // and now wait until request is processed
@@ -1329,8 +1329,10 @@ Bool_t THttpServer::ExecuteWS(std::shared_ptr<THttpCallArg> &arg, Bool_t externa
       return kTRUE;
    }
 
-   if (!handler)
+   if (!handler) {
+      arg->Set404();
       return kFALSE;
+   }
 
    Bool_t process = kFALSE;
 

@@ -16,6 +16,7 @@
 #pragma link C++ class CustomAtomicNotLockFree+;
 
 #pragma link C++ class CustomStruct+;
+#pragma link C++ class CustomStruct::VectorWrapper<Long64_t>+;
 #pragma link C++ class DerivedA+;
 #pragma link C++ class DerivedA2+;
 #pragma link C++ class DerivedWithTypedef + ;
@@ -27,8 +28,15 @@
 #pragma link C++ class IOConstructor+;
 #pragma link C++ class LowPrecisionFloats+;
 
+#pragma link C++ class std::map<int, CustomStruct>+ ;
+#pragma link C++ class std::map<int, float>+ ;
+
+#pragma link C++ class EdmContent<float, long long>+;
 #pragma link C++ class EdmWrapper<CustomStruct> +;
 #pragma link C++ class EdmHash < 1> + ;
+#pragma link C++ class EdmWrapper<long long>+;
+#pragma link C++ class EdmWrapper<std::map<int, EdmContent<float, long long>>>+;
+#pragma link C++ class EdmContainer+;
 
 #pragma link C++ class DataVector < int, double> + ;
 #pragma link C++ class DataVector < int, float> + ;
@@ -62,6 +70,7 @@
 #pragma link C++ class StructUsingCollectionProxy<CustomStruct> + ;
 #pragma link C++ class StructUsingCollectionProxy<StructUsingCollectionProxy<float>> + ;
 #pragma link C++ class StructUsingCollectionProxy<int> + ;
+#pragma link C++ class StructUsingCollectionProxy<Long64_t>+;
 
 #pragma link C++ class TrivialTraitsBase + ;
 #pragma link C++ class TrivialTraits + ;
@@ -133,6 +142,9 @@
 #pragma link C++ options = version(3) class NewName < int> + ;
 #pragma link C++ options = version(3) class NewName < NewName < int>> + ;
 #pragma read sourceClass = "OldName<OldName<int>>" targetClass = "NewName<OldName<int>>" version = "[3]"
+#pragma link C++ options = version(4) class OldName<float>+;
+#pragma link C++ options = version(5) class NewName<float>+;
+#pragma read sourceClass = "OldName<float>" targetClass = "NewName<float>"
 
 #pragma link C++ struct SourceStruct + ;
 #pragma link C++ struct StructWithSourceStruct + ;
@@ -166,5 +178,12 @@
 #pragma link C++ class v2::ExampleMC+;
 #pragma read sourceClass = "v1::ExampleMC" source = "v1::Vector3D fSpin" version="[1-]" targetClass = \
    "v2::ExampleMC" target = "fHelicity" code = "{ fHelicity = onfile.fSpin.fZ; }"
+
+#pragma link C++ class MemberWithCustomStreamer+;
+
+#pragma link C++ class AlignmentDeterminedByTransientMember+;
+#pragma link C++ class AlignedAs+;
+#pragma link C++ class OverAligned+;
+#pragma link C++ class AlignmentEnvelope+;
 
 #endif

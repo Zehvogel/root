@@ -26,14 +26,15 @@ Use $ROOTSYS/bin/hadd to merge many histogram files
 */
 
 
-#include <cstring>
 #include "TChain.h"
 #include "TFile.h"
 #include "TH1.h"
 #include "TTree.h"
 #include "TKey.h"
 #include "TSystem.h"
-#include "Riostream.h"
+
+#include <cstring>
+#include <iostream>
 
 TList *FileList;
 TFile *Target;
@@ -60,10 +61,9 @@ void runtreeCloneTest2(const char* outFile = "pion_merged.root", //here's where 
 
       TString fileName(cFileName);
       if(fileName.EndsWith(".root") && fileName.BeginsWith(inputFileBeginsWith)) {
-         auto fullName = gSystem->ConcatFileName(inputDir,fileName);
-         FileList->Add( TFile::Open(fullName));
-         cout << "  Adding " << fullName << endl;
-         delete [] fullName;
+         gSystem->PrependPathName(inputDir, fileName);
+         FileList->Add( TFile::Open(fileName));
+         cout << "  Adding " << fileName << endl;
       }
    }
    cout <<"\n\nDone collecting files. begin merging\n"<<endl;
@@ -164,7 +164,7 @@ void MergeRootfile( TDirectory *target, TList *sourcelist )
       if ( obj ) {
          target->cd();
 
-         //!!if the object is a tree, it is stored in globChain...
+         // if the object is a tree, it is stored in globChain...
          if(obj->IsA()->InheritsFrom( "TTree" ))
             globChain->Merge(target->GetFile(),0,"keep fast");
          else

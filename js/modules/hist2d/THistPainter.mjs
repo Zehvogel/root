@@ -1,6 +1,6 @@
 import { gStyle, BIT, settings, constants, create, isObject, isFunc, isStr, getPromise,
          clTList, clTPaveStats, clTPaletteAxis, clTProfile, clTProfile2D, clTProfile3D, clTPad,
-         clTAxis, clTF1, clTF2, kNoZoom, clTCutG, kNoStats, kTitle, setHistogramTitle } from '../core.mjs';
+         clTAxis, clTF1, clTF2, kNoZoom, clTCutG, kNoStats, kTitle, setHistogramTitle, addMethods } from '../core.mjs';
 import { getColorPalette } from '../base/colors.mjs';
 import { DrawOptions } from '../base/BasePainter.mjs';
 import { ObjectPainter, EAxisBits, kAxisTime, kAxisLabels } from '../base/ObjectPainter.mjs';
@@ -12,6 +12,7 @@ import { gamma_quantile, gamma_quantile_c } from '../base/math.mjs';
 const kCARTESIAN = 1, kPOLAR = 2, kCYLINDRICAL = 3, kSPHERICAL = 4, kRAPIDITY = 5,
       kNormal = 0, kPoisson = 1, kPoisson2 = 2,
       kOnlyCheck = 'only-check';
+
 /**
  * @summary Class to decode histograms draw options
  * @desc All options started from capital letter are major drawing options
@@ -35,7 +36,7 @@ class THistDrawOptions {
          Text: false, TextAngle: 0, TextKind: '', Char: 0, Color: false, Contour: 0, Cjust: false,
          Lego: 0, Surf: 0, Off: 0, Tri: 0, Proj: 0, AxisPos: 0, Ortho: gStyle.fOrthoCamera,
          Spec: false, Pie: false, List: false, Zscale: false, Zvert: true, PadPalette: false,
-         Candle: '', Violin: '', Scaled: null, Circular: 0, Poisson: kNormal,
+         Candle: '', Violin: '', Scaled: null, Circular: 0, Poisson: kNormal, Polar: 0,
          GLBox: 0, GLColor: false, Project: '', ProfileProj: '', Profile2DProj: '', System: kCARTESIAN,
          AutoColor: false, NoStat: false, ForceStat: false, PadStats: false, PadTitle: false, AutoZoom: false,
          HighRes: 0, Zero: 1, Palette: 0, BaseLine: false, ShowEmpty: false,
@@ -387,8 +388,18 @@ class THistDrawOptions {
       if (d.check('R3D_', true))
          this.Render3D = constants.Render3D.fromString(d.part.toLowerCase());
 
-      if (d.check('POL'))
+      if (d.check('POLN')) {
          this.System = kPOLAR;
+         this.Polar = 3;
+      }
+      if (d.check('POLF')) {
+         this.System = kPOLAR;
+         this.Polar = 2;
+      }
+      if (d.check('POL')) {
+         this.System = kPOLAR;
+         this.Polar = 1;
+      }
       if (d.check('CYL'))
          this.System = kCYLINDRICAL;
       if (d.check('SPH'))
@@ -1008,7 +1019,7 @@ class FunctionsHandler {
    #painter;  // object painter to which functions belongs
    #pad_painter; // pad painter
 
-   constructor(painter, pp, funcs, statpainter) {
+   constructor(painter, pp, funcs, statpainter, update_statpainter) {
       this.#painter = painter;
       this.#pad_painter = pp;
 
@@ -1067,6 +1078,8 @@ class FunctionsHandler {
          const indx = painters.indexOf(statpainter);
          if (indx >= 0)
             painters.splice(indx, 1);
+         if (update_statpainter && (update_painters.indexOf(statpainter) < 0))
+            update_painters.push(statpainter);
       }
 
       // remove all function which are not found in new list of functions
@@ -1137,6 +1150,7 @@ class THistPainter extends ObjectPainter {
    #auto_exec; // can be reused when sending option back to server
    #funcs_handler; // special instance for functions drawing
    #contour;  // histogram colors contour
+   #create_stats;  // if stats was created by painter
 
    /** @summary Constructor
      * @param {object|string} dom - DOM element for drawing or element id
@@ -1281,7 +1295,7 @@ class THistPainter extends ObjectPainter {
       if (o._pfc > 1 || o._plc > 1 || o._pmc > 1) {
          const pp = this.getPadPainter();
          if (isFunc(pp?.getAutoColor)) {
-            const icolor = pp.getAutoColor(histo.$num_histos);
+            const icolor = pp.getAutoColor();
             this.#auto_exec = '';
             if (o._pfc > 1) {
                o._pfc = 1;
@@ -1440,7 +1454,7 @@ class THistPainter extends ObjectPainter {
             histo.fBins = obj.fBins;
 
          // remove old functions, update existing, prepare to draw new one
-         this.#funcs_handler = new FunctionsHandler(this, pp, obj.fFunctions, statpainter);
+         this.#funcs_handler = new FunctionsHandler(this, pp, obj.fFunctions, statpainter, this.#create_stats);
 
          const changed_opt = (histo.fOption !== obj.fOption);
          histo.fOption = obj.fOption;
@@ -1765,7 +1779,7 @@ class THistPainter extends ObjectPainter {
 
    /** @summary Returns true if stats box fill can be ignored */
    isIgnoreStatsFill() {
-      return !this.getObject() || (!this.draw_content && !this.create_stats && !this.hasSnapId());
+      return !this.getObject() || (!this.draw_content && !this.#create_stats && !this.hasSnapId());
    }
 
    /** @summary Create stat box for histogram if required */
@@ -1804,7 +1818,7 @@ class THistPainter extends ObjectPainter {
       if (!stats && !optstat && !optfit)
          return null;
 
-      this.create_stats = true;
+      this.#create_stats = true;
 
       if (stats)
          return stats;
@@ -1848,6 +1862,12 @@ class THistPainter extends ObjectPainter {
 
       if (!histo.fFunctions)
          histo.fFunctions = create(clTList);
+      else if (histo.fFunctions._typename !== clTList) {
+         // Fix - seen once in jupyter notebook that typename was TList*
+         console.error(`Fixing wrong typename ${histo.fFunctions._typename} for histogram list of functions`);
+         histo.fFunctions._typename = clTList;
+         addMethods(histo.fFunctions, clTList);
+      }
 
       if (asfirst)
          histo.fFunctions.AddFirst(obj);
@@ -2277,6 +2297,12 @@ class THistPainter extends ObjectPainter {
 
       this.#contour = cntr;
       return cntr;
+   }
+
+   /** @summary Reset contour object
+    * @private */
+   resetContour() {
+      this.#contour = undefined;
    }
 
    /** @summary Return Z-scale ranges to create contour */
@@ -2859,7 +2885,7 @@ class THistPainter extends ObjectPainter {
          this.maxbin = this.minbin = 0;
 
       // force recalculation of z levels
-      this.#contour = undefined;
+      this.resetContour();
 
       if (args.zrange)
          Object.assign(res, this.#getContourRanges(this.getMainPainter(), this.getFramePainter()));

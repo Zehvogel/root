@@ -86,7 +86,7 @@ struct B_ProtonParameters : public CandidateParameters, public TObject
 {
     B_ProtonParameters();
     void reset();
-    char charge; //!
+    char charge; ///<!
 //    unsigned char isPID;
     int pidMask;
     ClassDefOverride(B_ProtonParameters, 1);
@@ -97,7 +97,7 @@ struct LambdaPionParameters : public CandidateParameters, public TObject
 {
     LambdaPionParameters();
     void reset();
-    char charge; //!
+    char charge; ///<!
     ClassDefOverride(LambdaPionParameters, 1);
 };
 
@@ -106,7 +106,7 @@ struct LambdaProtonParameters : public CandidateParameters, public TObject
 {
     LambdaProtonParameters();
     void reset();
-    char charge; //!
+    char charge; ///<!
 //    unsigned char isPID;
     int pidMask;
     ClassDefOverride(LambdaProtonParameters, 1);
@@ -172,13 +172,13 @@ struct JansEventHeader : public TObject
     float getSqrtS();
 
     // Match MC with B Daughter List
-    unsigned char kidsFoundDaughter[NumFinalStates]; //! don't write to file
+    unsigned char kidsFoundDaughter[NumFinalStates]; ///<! don't write to file
 
     // Match MC with reco list
-    unsigned char kidsFoundList[NumFinalStates]; //!
+    unsigned char kidsFoundList[NumFinalStates]; ///<!
 
     // Match MC with ChargedTracks/CalorNeutral
-    unsigned char kidsFoundRaw[NumFinalStates]; //!
+    unsigned char kidsFoundRaw[NumFinalStates]; ///<!
 
     unsigned char isWrongDecay;
 
@@ -201,7 +201,7 @@ struct JansEventHeader : public TObject
 struct JansEvent : public TObject
 {
 //WLAV: commented out the following three lines:
-//#if !defined(__CINT__)
+//#if !defined(__CLING__)
 //    typedef GClonesArray<B_Parameters> B_List;
 //#else
     typedef TClonesArray B_List;

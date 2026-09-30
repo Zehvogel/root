@@ -9,7 +9,7 @@
 #define TrigInDetTrackTruth_p1_h
 class TrigInDetTrackTruth_p1;
 
-#include "Riostream.h"
+#include <iostream>
 #include <vector>
 #include "TPObjRef.h"
 #include <utility>
@@ -33,7 +33,7 @@ public:
    virtual ~TrigInDetTrackTruth_p1();
 
 };
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class pair<unsigned int,unsigned int>+;
 #endif
 #endif

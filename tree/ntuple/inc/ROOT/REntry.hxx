@@ -1,5 +1,4 @@
 /// \file ROOT/REntry.hxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \date 2018-07-19
 
@@ -34,6 +33,14 @@ namespace ROOT {
 class RNTupleFillContext;
 class RNTupleReader;
 
+namespace Experimental {
+class RNTupleAttrSetReader;
+
+namespace Internal {
+struct RNTupleAttrEntry;
+}
+} // namespace Experimental
+
 // clang-format off
 /**
 \class ROOT::REntry
@@ -48,6 +55,8 @@ class REntry {
    friend class RNTupleFillContext;
    friend class RNTupleModel;
    friend class RNTupleReader;
+   friend class Experimental::RNTupleAttrSetReader;
+   friend struct Experimental::Internal::RNTupleAttrEntry;
 
 private:
    /// The entry must be linked to a specific model, identified by a model ID
@@ -206,7 +215,7 @@ public:
    template <typename T>
    void BindRawPtr(std::string_view fieldName, T *rawPtr)
    {
-      BindRawPtr<void>(GetToken(fieldName), rawPtr);
+      BindRawPtr<T>(GetToken(fieldName), rawPtr);
    }
 
    /// Get the (typed) pointer to the value for the field referenced by `token`.
@@ -239,6 +248,8 @@ public:
    }
 
    const std::string &GetTypeName(std::string_view fieldName) const { return GetTypeName(GetToken(fieldName)); }
+
+   bool HasField(std::string_view fieldName) const { return fFieldName2Token.count(std::string(fieldName)) > 0; }
 
    std::uint64_t GetModelId() const { return fModelId; }
    std::uint64_t GetSchemaId() const { return fSchemaId; }

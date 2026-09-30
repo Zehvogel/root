@@ -19,9 +19,13 @@
 #include <clang/Basic/TargetOptions.h>
 #include <clang/Frontend/CompilerInstance.h>
 
+#include <llvm/ExecutionEngine/Orc/Debugging/DebugInfoSupport.h>
+#include <llvm/ExecutionEngine/Orc/Debugging/DebuggerSupport.h>
+#include <llvm/ExecutionEngine/Orc/Debugging/PerfSupportPlugin.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/ExecutionEngine/Orc/TargetProcess/JITLoaderPerf.h>
 #include <llvm/ExecutionEngine/SectionMemoryManager.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/MC/TargetRegistry.h>
@@ -41,6 +45,73 @@ using namespace llvm::jitlink;
 using namespace llvm::orc;
 
 namespace {
+  static SymbolMap GetListOfPerfSymbols(const LLJIT& Jit) {
+    // ORC's perf support plugin looks up these runtime entry points through the
+    // process symbol table. In ROOT, the symbols will remain hidden inside
+    // libCling.so. Explicitly inject them into the JITDylib.
+    static const std::pair<const char*, const void*> NamePtrList[] = {
+        {"llvm_orc_registerJITLoaderPerfStart",
+         (void*)&llvm_orc_registerJITLoaderPerfStart},
+        {"llvm_orc_registerJITLoaderPerfEnd",
+         (void*)&llvm_orc_registerJITLoaderPerfEnd},
+        {"llvm_orc_registerJITLoaderPerfImpl",
+         (void*)&llvm_orc_registerJITLoaderPerfImpl},
+    };
+
+    SymbolMap PerfSymbols;
+    for (const auto& NamePtr : NamePtrList) {
+      PerfSymbols[Jit.mangleAndIntern(NamePtr.first)] = {
+          orc::ExecutorAddr::fromPtr(NamePtr.second), JITSymbolFlags::Exported};
+    }
+    return PerfSymbols;
+  }
+
+  // This could potentially be upstreamed, similar to enableDebuggerSupport()
+  Error enablePerfSupport(LLJIT& J) {
+    auto* ObjLinkingLayer =
+        dyn_cast<ObjectLinkingLayer>(&J.getObjLinkingLayer());
+    if (!ObjLinkingLayer)
+      return make_error<StringError>("Cannot enable LLJIT perf support: "
+                                     "perf support requires JITLink",
+                                     inconvertibleErrorCode());
+    auto ProcessSymsJD = J.getProcessSymbolsJITDylib();
+    if (!ProcessSymsJD)
+      return make_error<StringError>("Cannot enable LLJIT perf support: "
+                                     "Process symbols are not available",
+                                     inconvertibleErrorCode());
+
+    // Manually define the symbols
+    cantFail(ProcessSymsJD->define(absoluteSymbols(GetListOfPerfSymbols(J))));
+
+    auto& ES = J.getExecutionSession();
+    const auto& TT = J.getTargetTriple();
+
+    switch (TT.getObjectFormat()) {
+      case Triple::ELF: {
+        auto debugInfoPreservationPlugin =
+            DebugInfoPreservationPlugin::Create();
+        if (!debugInfoPreservationPlugin)
+          return debugInfoPreservationPlugin.takeError();
+
+        auto perfSupportPlugin =
+            PerfSupportPlugin::Create(ES.getExecutorProcessControl(),
+                                      *ProcessSymsJD, true, true);
+        if (!perfSupportPlugin)
+          return perfSupportPlugin.takeError();
+
+        ObjLinkingLayer->addPlugin(std::move(*debugInfoPreservationPlugin));
+        ObjLinkingLayer->addPlugin(std::move(*perfSupportPlugin));
+
+        return Error::success();
+      }
+      default:
+        return make_error<StringError>("Cannot enable LLJIT perf support: " +
+                                           Triple::getObjectFormatTypeName(
+                                               TT.getObjectFormat()) +
+                                           " is not supported",
+                                       inconvertibleErrorCode());
+    }
+  }
 
   class ClingMMapper final : public SectionMemoryManager::MemoryMapper {
   public:
@@ -346,14 +417,20 @@ public:
 
 static bool UseJITLink(const Triple& TT) {
   bool jitLink = false;
-  // Default to JITLink on macOS and RISC-V, as done in (recent) LLVM by
-  // LLJITBuilderState::prepareForConstruction.
-  if (TT.getArch() == Triple::riscv64 || TT.getArch() == Triple::loongarch64 ||
-      (TT.isOSBinFormatMachO() &&
-       (TT.getArch() == Triple::aarch64 || TT.getArch() == Triple::x86_64)) ||
-      (TT.isOSBinFormatELF() &&
-       (TT.getArch() == Triple::aarch64 || TT.getArch() == Triple::ppc64le))) {
-    jitLink = true;
+  // Auto-configure JITLink following the logic in
+  // LLJITBuilderState::prepareForConstruction
+  switch (TT.getArch()) {
+    case Triple::riscv64:
+    case Triple::loongarch64: jitLink = true; break;
+    case Triple::aarch64: jitLink = !TT.isOSBinFormatCOFF(); break;
+    case Triple::arm:
+    case Triple::armeb:
+    case Triple::thumb:
+    case Triple::thumbeb: jitLink = TT.isOSBinFormatELF(); break;
+    case Triple::x86_64: jitLink = !TT.isOSBinFormatCOFF(); break;
+    case Triple::ppc64: jitLink = TT.isPPC64ELFv2ABI(); break;
+    case Triple::ppc64le: jitLink = TT.isOSBinFormatELF(); break;
+    default: break;
   }
   // Finally, honor the user's choice by setting an environment variable.
   if (const char* clingJitLink = std::getenv("CLING_JITLINK")) {
@@ -490,10 +567,25 @@ IncrementalJIT::IncrementalJIT(
   LLJITBuilder Builder;
   Builder.setDataLayout(m_TM->createDataLayout());
   Builder.setExecutorProcessControl(std::move(EPC));
+  // Our builtin LLVM uses LLVM_ENABLE_THREADS=OFF, but when concurrent
+  // compilation is available we need to disable it. Otherwise LLJIT clones
+  // modules on emit, invalidating Transaction::m_CompiledModule.
+  Builder.setSupportConcurrentCompilation(false);
+
+  if (m_JITLink) {
+    Builder.setPrePlatformSetup([](llvm::orc::LLJIT& J) {
+      // Try to enable debugging of JIT'd code (only works with JITLink for
+      // ELF and MachO).
+      if (cling::utils::ConvertEnvValueToBool(std::getenv("CLING_DEBUG")))
+        consumeError(enableDebuggerSupport(J));
+      if (cling::utils::ConvertEnvValueToBool(std::getenv("CLING_PROFILE")))
+        consumeError(enablePerfSupport(J));
+      return llvm::Error::success();
+    });
+  }
 
   // Create ObjectLinkingLayer with our own MemoryManager.
-  Builder.setObjectLinkingLayerCreator([&](ExecutionSession& ES,
-                                           const Triple& TT)
+  Builder.setObjectLinkingLayerCreator([&](ExecutionSession& ES)
                                            -> std::unique_ptr<ObjectLayer> {
     if (m_JITLink) {
       // For JITLink, we only need a custom memory manager to avoid freeing the
@@ -507,7 +599,7 @@ IncrementalJIT::IncrementalJIT(
     }
 
     auto MMapper = std::make_unique<ClingMMapper>();
-    auto GetMemMgr = [MMapper = std::move(MMapper)]() {
+    auto GetMemMgr = [MMapper = std::move(MMapper)](const llvm::MemoryBuffer &) {
       return std::make_unique<ClingMemoryManager>(*MMapper);
     };
     auto Layer =
@@ -522,6 +614,8 @@ IncrementalJIT::IncrementalJIT(
     if (cling::utils::ConvertEnvValueToBool(std::getenv("CLING_PROFILE")))
       Layer->registerJITEventListener(*cling::createPerfJITEventListener());
 #endif
+
+    auto TT = ES.getTargetTriple();
 
     // The following is based on LLJIT::createObjectLinkingLayer.
     if (TT.isOSBinFormatCOFF()) {
@@ -747,7 +841,7 @@ void* IncrementalJIT::getSymbolAddress(StringRef Name, bool IncludeHostSymbols){
   if (!IncludeHostSymbols)
     G.lock();
 
-  std::pair<llvm::StringMapIterator<std::nullopt_t>, bool> insertInfo;
+  std::pair<llvm::StringSet<>::iterator, bool> insertInfo;
   if (!IncludeHostSymbols)
     insertInfo = m_ForbidDlSymbols.insert(Name);
 

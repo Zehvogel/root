@@ -102,7 +102,7 @@ PyObject* TemplateProxy::Instantiate(const std::string& fname,
                 std::string ptrdef;
                 if (PyObject_GetBuffer(itemi, &bufinfo, PyBUF_FORMAT) == 0) {
                     for (int j = 0; j < bufinfo.ndim; ++j) ptrdef += "*";
-                    CPyCppyy_PyBuffer_Release(itemi, &bufinfo);
+                    PyBuffer_Release(&bufinfo);
                 } else {
                     ptrdef += "*";
                     PyErr_Clear();
@@ -173,6 +173,13 @@ PyObject* TemplateProxy::Instantiate(const std::string& fname,
 
         Py_DECREF(pyargs);
         Py_DECREF(tpArgs);
+
+    // Propagate the error that occurs if we can't construct the C++ name
+    // from the provided template argument
+        if (PyErr_Occurred()) {
+            return nullptr;
+        }
+
         if (name_v1.size())
             proto = name_v1.substr(1, name_v1.size()-2);
     }
@@ -220,14 +227,7 @@ PyObject* TemplateProxy::Instantiate(const std::string& fname,
         PyObject* pyol = PyObject_GetItem(dct, pycachename);
         if (!pyol) PyErr_Clear();
         bool bIsCppOL = CPPOverload_Check(pyol);
-
-        if (pyol && !bIsCppOL && !TemplateProxy_Check(pyol)) {
-        // unknown object ... leave well alone
-            Py_DECREF(pyol);
-            Py_DECREF(pycachename);
-            Py_DECREF(dct);
-            return nullptr;
-        }
+        bool bIsCppTP = TemplateProxy_Check(pyol);
 
     // find the full name if the requested one was partial
         PyObject* exact = nullptr;
@@ -277,10 +277,17 @@ PyObject* TemplateProxy::Instantiate(const std::string& fname,
 
     // Case 5: must be a template proxy, meaning that current template name is not
     // a template overload
-        else {
+        else if (bIsCppTP) {
             ((TemplateProxy*)pyol)->AdoptTemplate(meth->Clone());
             Py_DECREF(pyol);
             pyol = (PyObject*)CPPOverload_New(fname, meth);      // takes ownership
+        }
+    // Case 6: pre-existing object is not a CPPOverload nor TemplateProxy
+    // we do not cache it
+    // as this might be a pythonization (monkey-patched func/method)
+        else {
+            Py_DECREF(pyol);
+            pyol = (PyObject*)CPPOverload_New(fname, meth);
         }
 
     // Special Case if name was aliased (e.g. typedef in template instantiation)
@@ -289,6 +296,7 @@ PyObject* TemplateProxy::Instantiate(const std::string& fname,
         }
 
     // cleanup
+        Py_XDECREF(exact);
         Py_DECREF(pyresname);
         Py_DECREF(pycachename);
 
@@ -655,8 +663,8 @@ static PyObject* tpp_call(TemplateProxy* pytmpl, PyObject* args, PyObject* kwds)
         int pcnt = 0;
         pymeth = pytmpl->Instantiate(pytmpl->fTI->fCppName, args, nargsf, pref, &pcnt);
         if (pymeth) {
-        // attempt actual call; argument based, so do not allow implicit conversions
-            result = CallMethodImp(pytmpl, pymeth, args, nargsf, kwds, false, sighash);
+        // attempt actual call; even if argument based, allow implicit conversions, for example for non-template arguments
+            result = CallMethodImp(pytmpl, pymeth, args, nargsf, kwds, true, sighash);
             if (result) TPPCALL_RETURN;
         }
         Utility::FetchError(errors);
@@ -720,6 +728,11 @@ static PyObject* tpp_subscript(TemplateProxy* pytmpl, PyObject* args)
     Py_XDECREF(typeBoundMethod->fTemplateArgs);
     typeBoundMethod->fTemplateArgs = CPyCppyy_PyText_FromString(
         Utility::ConstructTemplateArgs(nullptr, args).c_str());
+// Propagate the error that occurs if we can't construct the C++ name
+// from the provided template argument
+    if (PyErr_Occurred()) {
+        return nullptr;
+    }
     return (PyObject*)typeBoundMethod;
 }
 
@@ -815,6 +828,11 @@ static PyObject* tpp_overload(TemplateProxy* pytmpl, PyObject* args)
         if (ol) return ol;
 
         proto = Utility::ConstructTemplateArgs(nullptr, args);
+    // Propagate the error that occurs if we can't construct the C++ name
+    // from the provided template argument
+        if (PyErr_Occurred()) {
+            return nullptr;
+        }
 
         scope = ((CPPClass*)pytmpl->fTI->fPyClass)->fCppType;
         cppmeth = Cppyy::GetMethodTemplate(
@@ -960,12 +978,7 @@ PyTypeObject TemplateProxy_Type = {
 #if PY_VERSION_HEX >= 0x03080000
     , 0                                // tp_vectorcall
 #endif
-#if PY_VERSION_HEX >= 0x030c0000
-    , 0                                // tp_watched
-#endif
-#if PY_VERSION_HEX >= 0x030d0000
-    , 0                                // tp_versions_used
-#endif
+    CPYCPPYY_PYTYPE_TAIL
 };
 
 } // namespace CPyCppyy

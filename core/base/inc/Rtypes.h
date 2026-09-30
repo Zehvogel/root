@@ -27,7 +27,6 @@
 #include <cstdio>
 #include "strtok.h"     // provides R__STRTOK_R with <cstring> include
 #include "strlcpy.h"    // part of string.h on systems that have it
-#include "snprintf.h"   // part of stdio.h on systems that have it
 #include <type_traits>
 #endif
 
@@ -60,7 +59,7 @@ enum ESysConstants {
    kMAXSIGNALS       = 16,
    kMAXPATHLEN       = 8192,
    kBUFFERSIZE       = 8192,
-   kItimerResolution = 10      // interval-timer resolution in ms
+   kItimerResolution = 5       ///< interval-timer resolution in ms (used for TThread, TTimer, Emit, Connect, etc.)
 };
 
 enum EColor { kWhite   =0,   kBlack    =1,   kGray   =920,

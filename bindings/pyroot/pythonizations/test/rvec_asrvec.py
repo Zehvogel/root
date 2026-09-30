@@ -27,13 +27,20 @@ class AsRVec(unittest.TestCase):
     """
 
     # Helpers
-    dtypes = ["int16", "int32", "int64", "uint16", "uint32", "uint64", "float32", "float64", "bool"]
+    dtypes = ["int8", "uint8", "int16", "int32", "int64", "uint16", "uint32", "uint64", "float32", "float64", "bool"]
 
-    def check_memory_adoption(self, root_obj, np_obj):
-        np_obj[0] = get_maximum_for_dtype(np_obj.dtype)
-        np_obj[1] = get_minimum_for_dtype(np_obj.dtype)
-        self.assertEqual(root_obj[0], np_obj[0])
-        self.assertEqual(root_obj[1], np_obj[1])
+    def check_memory_adoption(self, root_obj, np_obj, copy=False):
+        if not copy:
+            np_obj[0] = get_maximum_for_dtype(np_obj.dtype)
+            np_obj[1] = get_minimum_for_dtype(np_obj.dtype)
+        for i in range(2):
+            root_val = root_obj[i]
+            # RVec<unsigned char> elements are returned as Python strings (e.g. '\x7f' instead of 127),
+            # we need to convert them back to integers for comparison
+            if isinstance(root_val, str):
+                root_val = ord(root_val)
+
+            self.assertEqual(root_val, np_obj[i])
 
     def check_size(self, expected_size, obj):
         self.assertEqual(expected_size, obj.size())
@@ -44,9 +51,15 @@ class AsRVec(unittest.TestCase):
         Test adoption of numpy arrays with different data types
         """
         for dtype in self.dtypes:
-            np_obj = np.empty(2, dtype=dtype)
-            root_obj = ROOT.VecOps.AsRVec(np_obj)
-            self.check_memory_adoption(root_obj, np_obj)
+            if dtype == "int8":
+                # For int8 we use explicit small values to avoid platform-dependent signed char representation issues
+                np_obj = np.array([42, 35], dtype="int8")
+                root_obj = ROOT.VecOps.AsRVec(np_obj)
+                self.check_memory_adoption(root_obj, np_obj, copy=True)
+            else:
+                np_obj = np.empty(2, dtype=dtype)
+                root_obj = ROOT.VecOps.AsRVec(np_obj)
+                self.check_memory_adoption(root_obj, np_obj)
             self.check_size(2, root_obj)
 
     def test_object_dtype_strings(self):
@@ -123,7 +136,7 @@ class AsRVec(unittest.TestCase):
         """
         Test reference count of returned RVec
 
-        In case of Python <=3.14, we expect a refcount of 2 for the RVec
+        In case of Python < 3.14, we expect a refcount of 2 for the RVec
         because the call to sys.getrefcount creates a second reference by
         itself. Starting from Python 3.14, we expect a refcount of 1 because
         there were changes to the interpreter to avoid some unnecessary ref

@@ -55,6 +55,20 @@ if(fortran AND CMAKE_Fortran_COMPILER)
   ROOT_EXECUTABLE(g2root g2root.f LIBRARIES minicern CMAKENOEXPORT)
   set_target_properties(g2root PROPERTIES COMPILE_FLAGS "-w")
   ROOT_EXECUTABLE(h2root h2root.cxx LIBRARIES Core RIO Net Hist Graf Graf3d Gpad Tree Matrix MathCore Thread minicern CMAKENOEXPORT)
+
+  # This is needed in particular for macOS, where the path of the GNU Fortran
+  # library might not be in the default DYLD_LIBRARY_PATH, but it gets picked
+  # up with enable_language(Fortran).
+  if(APPLE AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
+    # Compute path to quadmath
+    execute_process(
+      COMMAND ${CMAKE_Fortran_COMPILER} -print-file-name=libgfortran.dylib
+      OUTPUT_VARIABLE LIBGFORTRAN_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE)
+    get_filename_component(LIBGFORTRAN_DIR "${LIBGFORTRAN_PATH}" DIRECTORY)
+    set_property(TARGET h2root APPEND PROPERTY BUILD_RPATH "${LIBGFORTRAN_DIR}")
+    set_property(TARGET h2root APPEND PROPERTY INSTALL_RPATH "${LIBGFORTRAN_DIR}")
+  endif()
 endif()
 
 file(GLOB utils RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} python/root*)
@@ -119,8 +133,20 @@ endforeach()
 add_dependencies(genreflex rootcling)
 add_dependencies(rootcint rootcint)
 
-
 if (TARGET Gui)
   ROOT_EXECUTABLE(rootbrowse src/rootbrowse.cxx LIBRARIES RIO Core Rint Gui)
+  target_include_directories(rootbrowse PRIVATE ${CMAKE_SOURCE_DIR}/core/utils/inc)
 endif()
+
+ROOT_EXECUTABLE(rootcp src/rootcp.cxx LIBRARIES RIO Tree Core Rint)
+target_include_directories(rootcp PRIVATE ${CMAKE_SOURCE_DIR}/core/utils/inc)
+
 ROOT_EXECUTABLE(rootls src/rootls.cxx LIBRARIES RIO Tree Core Rint ROOTNTuple)
+target_include_directories(rootls PRIVATE ${CMAKE_SOURCE_DIR}/core/utils/inc)
+
+ROOT_EXECUTABLE(rootmkdir src/rootmkdir.cxx LIBRARIES RIO Core Rint)
+target_include_directories(rootmkdir PRIVATE ${CMAKE_SOURCE_DIR}/core/utils/inc)
+
+ROOT_EXECUTABLE(rootrm src/rootrm.cxx LIBRARIES RIO Core Rint)
+target_include_directories(rootrm PRIVATE ${CMAKE_SOURCE_DIR}/core/utils/inc)
+

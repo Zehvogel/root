@@ -44,8 +44,8 @@
 #include <iostream>
 #include "Getline.h"
 #include "strlcpy.h"
-#include "snprintf.h"
 
+#include <cstdio>
 #ifdef R__UNIX
 #include <csignal>
 #include <unistd.h>
@@ -189,7 +189,7 @@ TRint::TRint(const char *appClassName, Int_t *argc, char **argv, void *options, 
 
    gBenchmark = new TBenchmark();
 
-   if (!noLogo && !NoLogoOpt()) {
+   if (!noLogo && !NoLogoOpt() && !InputFiles()) {
       Bool_t lite = (Bool_t) gEnv->GetValue("Rint.WelcomeLite", 0);
       PrintLogo(lite);
    }
@@ -349,16 +349,16 @@ void TRint::ExecLogon()
    TString name = ".rootlogon.C";
    TString sname = "system";
    sname += name;
-   char *s = gSystem->ConcatFileName(TROOT::GetEtcDir(), sname);
+   TString temp_sname = sname;
+   TString temp_name = name;
+   const char *s = gSystem->PrependPathName(TROOT::GetEtcDir(), temp_sname);
    if (!gSystem->AccessPathName(s, kReadPermission)) {
       ProcessFile(s);
    }
-   delete [] s;
-   s = gSystem->ConcatFileName(gSystem->HomeDirectory(), name);
-   if (!gSystem->AccessPathName(s, kReadPermission)) {
-      ProcessFile(s);
+   const char *s1 = gSystem->PrependPathName(gSystem->HomeDirectory(), temp_name);
+   if (!gSystem->AccessPathName(s1, kReadPermission)) {
+      ProcessFile(s1);
    }
-   delete [] s;
    // avoid executing ~/.rootlogon.C twice
    if (strcmp(gSystem->HomeDirectory(), gSystem->WorkingDirectory())) {
       if (!gSystem->AccessPathName(name, kReadPermission))
@@ -430,7 +430,10 @@ void TRint::Run(Bool_t retrn)
             }
             TObjString *file = (TObjString *)fileObj;
             char cmd[kMAXPATHLEN+50];
-            if (!fNcmd)
+            // First print a newline before going over the inputs to separate
+            // printouts from the initial "root [0]" prompt. If root is run
+            // with "-q", there is no prompt and we don't need the newline.
+            if (!fNcmd && !QuitOpt())
                printf("\n");
             Bool_t rootfile = kFALSE;
 

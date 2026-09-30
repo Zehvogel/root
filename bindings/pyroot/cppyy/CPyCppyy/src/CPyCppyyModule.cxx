@@ -35,6 +35,12 @@ PyObject* Instance_FromVoidPtr(
 #include <utility>
 #include <vector>
 
+#if PY_VERSION_HEX < 0x030b0000
+namespace CPyCppyy {
+extern dict_lookup_func gDictLookupOrg;
+dict_lookup_func gDictLookupOrg = nullptr;
+} // namespace CPyCppyy
+#endif
 
 // Note: as of py3.11, dictionary objects no longer carry a function pointer for
 // the lookup, so it can no longer be shimmed and "from cppyy.interactive import *"
@@ -165,12 +171,7 @@ static PyTypeObject PyNullPtr_t_Type = {
 #if PY_VERSION_HEX >= 0x03080000
     , 0                  // tp_vectorcall
 #endif
-#if PY_VERSION_HEX >= 0x030c0000
-    , 0                  // tp_watched
-#endif
-#if PY_VERSION_HEX >= 0x030d0000
-    , 0                  // tp_versions_used
-#endif
+    CPYCPPYY_PYTYPE_TAIL
 };
 
 
@@ -212,12 +213,7 @@ static PyTypeObject PyDefault_t_Type = {
 #if PY_VERSION_HEX >= 0x03080000
     , 0                 // tp_vectorcall
 #endif
-#if PY_VERSION_HEX >= 0x030c0000
-    , 0                 // tp_watched
-#endif
-#if PY_VERSION_HEX >= 0x030d0000
-    , 0                 // tp_versions_used
-#endif
+    CPYCPPYY_PYTYPE_TAIL
 };
 
 namespace {
@@ -439,7 +435,8 @@ static PyObject* SetCppLazyLookup(PyObject*, PyObject* args)
 #else
 // As of py3.11, there is no longer a lookup function pointer in the dict object
 // to replace. Since this feature is not widely advertised, it's simply dropped
-    PyErr_Warn(PyExc_RuntimeWarning, (char*)"lazy lookup is no longer supported");
+    if (PyErr_WarnEx(PyExc_RuntimeWarning, (char*)"lazy lookup is no longer supported", 1) < 0)
+        return nullptr;
     (void)args; // avoid warning about unused parameter
 #endif
 

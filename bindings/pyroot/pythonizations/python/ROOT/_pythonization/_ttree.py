@@ -159,10 +159,16 @@ with ROOT.TFile('outfile.root') as infile:
 \endpythondoc
 """
 
-from ROOT.libROOTPythonizations import GetBranchAttr, BranchPyz
-from ._rvec import _array_interface_dtype_map, _get_cpp_type_from_numpy_type
+from ROOT.libROOTPythonizations import BranchPyz, GetBranchAttr
+
 from . import pythonization
-from ROOT._pythonization._memory_utils import _should_give_up_ownership, _constructor_releasing_ownership, _SetDirectory_SetOwnership
+from ._memory_utils import (
+    _constructor_releasing_ownership,
+    _SetDirectory_SetOwnership,
+    _should_give_up_ownership,
+)
+from ._rvec import _get_cpp_type_from_numpy_type
+
 
 # TTree iterator
 def _TTree__iter__(self):
@@ -181,27 +187,28 @@ def _pythonize_branch_addr(branch, addr_orig):
     """Helper for the SetBranchAddress pythonization, extracting the relevant
     address from a Python object if possible.
     """
-    import cppyy
     import ctypes
 
-    is_leaf_list = branch.IsA() is cppyy.gbl.TBranch.Class()
+    import ROOT
+
+    is_leaf_list = branch.IsA() is ROOT.TBranch.Class()
 
     if is_leaf_list:
         # If the branch is a leaf list, SetBranchAddress expects the
         # address of the object that has the corresponding data members.
-        return ctypes.c_void_p(cppyy.addressof(instance=addr_orig, byref=False))
+        return ctypes.c_void_p(ROOT._cppyy.addressof(instance=addr_orig, byref=False))
 
     # Otherwise, SetBranchAddress is expecting a pointer to the address of
     # the object, and the pointer needs to stay alive. Therefore, we create
     # a container for the pointer and cache it in the original cppyy proxy.
-    addr_view = cppyy.gbl.array["std::intptr_t", 1]([cppyy.addressof(instance=addr_orig, byref=False)])
+    addr_view = ROOT.array["std::intptr_t", 1]([ROOT._cppyy.addressof(instance=addr_orig, byref=False)])
 
     if not hasattr(addr_orig, "_set_branch_cached_pointers"):
         addr_orig._set_branch_cached_pointers = []
     addr_orig._set_branch_cached_pointers.append(addr_view)
 
     # Finally, we have to return the address of the container
-    return ctypes.c_void_p(cppyy.addressof(instance=addr_view, byref=False))
+    return ctypes.c_void_p(ROOT._cppyy.addressof(instance=addr_view, byref=False))
 
 
 def _get_cpp_type_from_array_typecode(typecode):
@@ -225,8 +232,7 @@ def _get_cpp_type_from_array_typecode(typecode):
 
 
 def _determine_data_type(addr):
-    """ Figure out data_type in case addr is a numpy.ndarray or array.array.
-    """
+    """Figure out data_type in case addr is a numpy.ndarray or array.array."""
 
     # For NumPy arrays
     if hasattr(addr, "__array_interface__"):
@@ -255,19 +261,48 @@ def _SetBranchAddress(self, bname, addr, *args, **kwargs):
     """
     import cppyy
 
+    import ROOT
+
     branch = self.GetBranch(bname)
 
     # Pythonization for cppyy proxies (of type CPPInstance)
-    if isinstance(addr, cppyy._backend.CPPInstance):
+    if isinstance(addr, ROOT._cppyy.types.Instance):
         addr = _pythonize_branch_addr(branch, addr)
 
     # Figure out data_type in case addr is a numpy.ndarray or array.array
     data_type = _determine_data_type(addr)
 
-    # We call the template specialization if we know the data type
-    func = self._OriginalSetBranchAddress if data_type is None else self._OriginalSetBranchAddress[data_type]
+    if data_type is None:
+        return self._OriginalSetBranchAddress(bname, addr, *args, **kwargs)
 
-    return func(bname, addr, *args, **kwargs)
+    # In the case the data_type is available, we would like to call the
+    # template overload of SetBranchAddress instantiatied for that type.
+    # However, there are two such overloads candidates:
+    #
+    #   template <class T> int TTree::SetBranchAddress(const char *bname, T **add, ...);
+    #   template <class T> int TTree::SetBranchAddress(const char *bname, T *add, ...);
+    #
+    # The cppyy bindings can't make a meaningful selection here as Python is
+    # lacking pointer semantics, so it considers both overloads as valid
+    # choices. In the past, we just happened to be lucky that it tried the T *
+    # overload first, which is the one we need. But as cppyy becomes more
+    # strict about overload resolution ambiguity errors, this won't work
+    # anymore. That's why we re-implement what happens in the template overload
+    # on the Python side.
+
+    cl = ROOT.TClass.GetClass[data_type]()
+    tp = ROOT.kOther_t
+    if not cl:
+        tp = ROOT.TDataType.GetType(cppyy.typeid(getattr(ROOT, data_type)))
+
+    # Extract the TBranch ptr argument if available
+    tbranch_ptr = ROOT.nullptr
+    if len(args) > 0:
+        tbranch_ptr = args[0]
+    elif "ptr" in kwargs:
+        tbranch_ptr = kwargs["ptr"]
+
+    return self._OriginalSetBranchAddress(bname, addr, ptr=tbranch_ptr, realClass=cl, datatype=tp, isptr=False)
 
 
 def _Branch(self, *args):
@@ -300,13 +335,13 @@ def _TTree__getattr__(self, key):
     self (TTree): The instance of the TTree object from which the attribute is being retrieved.
     key (str): The name of the branch to retrieve from the TTree object.
     """
-
-    import cppyy.ll
+    import ROOT
 
     out, cast_type = GetBranchAttr(self, key)
     if cast_type:
-        out = cppyy.ll.cast[cast_type](out)
+        out = ROOT._cppyy.ll.cast[cast_type](out)
     return out
+
 
 def _TTree_CloneTree(self, *args, **kwargs):
     """
@@ -320,6 +355,7 @@ def _TTree_CloneTree(self, *args, **kwargs):
         ROOT.SetOwnership(out_tree, False)
 
     return out_tree
+
 
 @pythonization("TTree")
 def pythonize_ttree(klass, name):
@@ -374,8 +410,9 @@ def pythonize_tchain(klass):
     klass._OriginalSetBranchAddress = klass.SetBranchAddress
     klass.SetBranchAddress = _SetBranchAddress
 
+
 @pythonization("TNtuple")
-def pythonize_tchain(klass):
+def pythonize_tntuple(klass):
 
     # The constructor needs to be explicitly pythonized for derived classes.
     klass._cpp_constructor = klass.__init__

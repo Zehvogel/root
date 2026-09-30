@@ -9,6 +9,8 @@
 //  * For the list of contributors see $ROOTSYS/README/CREDITS.             *
 //  *************************************************************************/
 
+#include <Python.h>
+
 // Bindings
 // CPyCppyy.h must be go first, since it includes Python.h, which must be
 // included before any standard header
@@ -21,12 +23,11 @@
 #include "TClassRef.h"
 #include "TObject.h"
 
-#include <Riostream.h>
-
 // Standard
 #include <mutex>
 #include <sstream>
-#include <stdio.h>
+#include <cstdio>
+#include <iostream>
 #include <string>
 
 /// \class TPython
@@ -134,46 +135,8 @@ Bool_t TPython::Initialize()
       return true;
 
    if (!Py_IsInitialized()) {
-      wchar_t rootStr[] = L"root";
-      wchar_t *argv[] = {rootStr};
-      int argc = sizeof(argv) / sizeof(argv[0]);
-#if PY_VERSION_HEX < 0x030b0000
-      Py_Initialize();
-#else
-      PyStatus status;
-      PyConfig config;
-
-      PyConfig_InitPythonConfig(&config);
-
-      status = PyConfig_SetArgv(&config, argc, argv);
-      if (PyStatus_Exception(status)) {
-         PyConfig_Clear(&config);
-         std::cerr << "Error when setting command line arguments." << std::endl;
-         return false;
-      }
-
-      status = Py_InitializeFromConfig(&config);
-      if (PyStatus_Exception(status)) {
-         PyConfig_Clear(&config);
-         std::cerr << "Error when initializing Python." << std::endl;
-         return false;
-      }
-      PyConfig_Clear(&config);
-#endif
-#if PY_VERSION_HEX < 0x03090000
-      PyEval_InitThreads();
-#endif
-
-      // try again to see if the interpreter is initialized
-      if (!Py_IsInitialized()) {
-         // give up ...
-         std::cerr << "Error: python has not been intialized; returning." << std::endl;
-         return false;
-      }
-
-#if PY_VERSION_HEX < 0x030b0000
-      PySys_SetArgv(argc, argv);
-#endif
+      // Trigger the Python initialization indirectly via CPyCppyy
+      CPyCppyy::Scope_Check(nullptr);
 
       mainThreadState = PyEval_SaveThread();
    }
@@ -183,11 +146,21 @@ Bool_t TPython::Initialize()
       PyGILRAII gilRaii;
 
       // force loading of the ROOT module
-      const int ret = PyRun_SimpleString("import ROOT");
-      if (ret != 0) {
-         std::cerr << "Error: import ROOT failed, check your PYTHONPATH environmental variable." << std::endl;
+      PyObject* rootModule = PyImport_ImportModule("ROOT");
+      if (!rootModule) {
+         PyErr_Print();
          return false;
       }
+
+      // to trigger the lazy initialization of the C++ runtime
+      PyObject* interpreterAttr = PyObject_GetAttrString(rootModule, "gInterpreter");
+      if (!interpreterAttr) {
+         PyErr_Print();
+         Py_DecRef(rootModule);
+         return false;
+      }
+
+      Py_DecRef(interpreterAttr);
 
       if (!gMainDict) {
 
@@ -198,6 +171,15 @@ Bool_t TPython::Initialize()
          // alive. The gMainDict is only used in Exec(), ExecScript(), and Eval(),
          // which should not be called after __main__ is garbage collected anyway.
       }
+
+      // Inject ROOT into __main__
+      if (PyDict_SetItemString(gMainDict, "ROOT", rootModule) != 0) {
+         PyErr_Print();
+         Py_DecRef(rootModule);
+         return false;
+      }
+
+      Py_DecRef(rootModule);
    }
 
    // python side class construction, managed by ROOT
@@ -283,8 +265,22 @@ void TPython::LoadMacro(const char *name)
    // obtain a reference to look for new classes later
    PyObjectRef old{PyDict_Values(gMainDict)};
 
-// actual execution
-   Exec((std::string("__pyroot_f = open(\"") + name +
+   // escape characters in the file name that would otherwise terminate or
+   // alter the Python string literal we put the file name into below
+   std::string escapedName;
+   escapedName.reserve(std::char_traits<char>::length(name));
+   for (const char *p = name; *p; ++p) {
+      switch (*p) {
+      case '\\': escapedName += "\\\\"; break;
+      case '"':  escapedName += "\\\""; break;
+      case '\n': escapedName += "\\n";  break;
+      case '\r': escapedName += "\\r";  break;
+      default:   escapedName += *p;     break;
+      }
+   }
+
+   // actual execution
+   Exec((std::string("__pyroot_f = open(\"") + escapedName +
          "\"); "
          "exec(__pyroot_f.read()); "
          "__pyroot_f.close(); del __pyroot_f")
@@ -398,16 +394,7 @@ Bool_t TPython::Exec(const char *cmd, std::any *result, std::string const &resul
    }
 
    // execute the command
-   PyObjectRef pyObjectResult{
-      PyRun_String(command.str().c_str(), Py_file_input, gMainDict, gMainDict)};
-
-   // test for error
-   if (pyObjectResult) {
-      return true;
-   }
-
-   PyErr_Print();
-   return false;
+   return CPyCppyy::Exec(command.str());
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -450,7 +437,7 @@ void TPython::Prompt()
    PyGILRAII gilRaii;
 
    // enter i/o interactive mode
-   PyRun_InteractiveLoop(stdin, "\0");
+   CPyCppyy::Prompt();
 }
 
 ////////////////////////////////////////////////////////////////////////////////

@@ -14,9 +14,6 @@
 #include "TBuffer.h"
 #include "TEnv.h"
 #include "TGraph.h"
-#include "TGraphErrors.h"
-#include "TGraphAsymmErrors.h"
-#include "TGraphBentErrors.h"
 #include "TH1.h"
 #include "TF1.h"
 #include "TStyle.h"
@@ -361,12 +358,13 @@ TGraph::TGraph(const TH1 *h)
       Error("TGraph", "Histogram must be 1-D; h %s is %d-D", h->GetName(), h->GetDimension());
       fNpoints = 0;
    } else {
-      fNpoints = ((TH1*)h)->GetXaxis()->GetNbins();
+      fNpoints = h->GetXaxis()->GetNbins();
    }
 
-   if (!CtorAllocate()) return;
+   if (!CtorAllocate())
+      return;
 
-   TAxis *xaxis = ((TH1*)h)->GetXaxis();
+   auto xaxis = h->GetXaxis();
    for (Int_t i = 0; i < fNpoints; i++) {
       fX[i] = xaxis->GetBinCenter(i + 1);
       fY[i] = h->GetBinContent(i + 1);
@@ -443,6 +441,7 @@ TGraph::TGraph(const TF1 *f, Option_t *option)
 /// The string format is by default `"%lg %lg"`.
 /// This is a standard c formatting for `scanf()`.
 /// For example, set format to  `"%lg,%lg"` for a comma-separated file.
+/// If format string is empty, suitable value will be provided based on file extension
 ///
 /// If columns of numbers should be skipped, a `"%*lg"` or `"%*s"` for each column
 /// can be added,  e.g. `"%lg %*lg %lg"` would read x-values from the first and
@@ -476,11 +475,21 @@ TGraph::TGraph(const char *filename, const char *format, Option_t *option)
    std::string line;
    Int_t np = 0;
 
-   // No delimiters specified (standard constructor).
-   if (strcmp(option, "") == 0) {
+   TString format_ = format;
+
+   if (!option || !*option) { // No delimiters specified (standard constructor).
+      // is empty format string specified - try to guess format from the file extension
+      if (format_.IsNull()) {
+         if (fname.EndsWith(".txt", TString::kIgnoreCase))
+            format_ = "%lg %lg";
+         else if (fname.EndsWith(".tsv", TString::kIgnoreCase))
+            format_ = "%lg\t%lg";
+         else
+            format_ = "%lg,%lg";
+      }
 
       while (std::getline(infile, line, '\n')) {
-         if (2 != sscanf(line.c_str(), format, &x, &y)) {
+         if (2 != sscanf(line.c_str(), format_.Data(), &x, &y)) {
             continue; //skip empty and ill-formed lines
          }
          SetPoint(np, x, y);
@@ -492,7 +501,6 @@ TGraph::TGraph(const char *filename, const char *format, Option_t *option)
    } else {
 
       // Checking format and creating its boolean counterpart
-      TString format_ = TString(format) ;
       format_.ReplaceAll(" ", "") ;
       format_.ReplaceAll("\t", "") ;
       format_.ReplaceAll("lg", "") ;
@@ -853,41 +861,38 @@ void TGraph::Draw(Option_t *option)
    TString opt = option;
    opt.ToLower();
 
-   if (opt.Contains("same")) {
+   if (opt.Contains("same"))
       opt.ReplaceAll("same", "");
-   }
 
    // in case of option *, set marker style to 3 (star) and replace
    // * option by option P.
-   Ssiz_t pos;
-   if ((pos = opt.Index("*")) != kNPOS) {
+   auto pos = opt.Index("*");
+   if (pos != kNPOS) {
       SetMarkerStyle(3);
-      opt.Replace(pos, 1, "p");
+      opt[pos] = 'p';
    }
 
    // If no option is specified, it is defined as "alp" in case there is
    // no current pad or if the current pad has no axis defined and if there is
    // no default option set using TGraph::SetOption. If fOption is set using
    // TGraph::SetOption, it is used as default option.
-   if ((!option || !strlen(option))) {
-      Option_t *topt = (!fOption.IsNull()) ? fOption.Data() : "alp";
-      if (gPad) {
-         if (!gPad->GetListOfPrimitives()->FindObject("TFrame"))
-            opt = topt;
-      } else {
-         opt = topt;
+   if (!option || !*option) {
+      if (!gPad || !gPad->GetListOfPrimitives()->FindObject("TFrame")) {
+         opt = !fOption.IsNull() ? fOption.Data() : "alp";
+         opt.ToLower();
       }
    }
 
    if (gPad) {
-      if (!gPad->IsEditable()) gROOT->MakeDefCanvas();
-      if (opt.Contains("a")) gPad->Clear();
+      if (!gPad->IsEditable())
+         gROOT->MakeDefCanvas();
+      if (opt.Contains("a"))
+         gPad->Clear();
    }
 
    AppendPad(opt);
 
    gPad->IncrementPaletteColor(1, opt);
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1173,6 +1178,8 @@ TObject *TGraph::FindObject(const TObject *obj) const
 /// "G"  | Uses the gradient implemented in `TF1::GradientPar` for the minimization. This allows to use Automatic Differentiation when it is supported by the provided TF1 function.
 /// "EX0" | When fitting a TGraphErrors or TGraphAsymErrors do not consider errors in the X coordinates
 /// "ROB" | In case of linear fitting, compute the LTS regression coefficients (robust (resistant) regression), using the default fraction of good points "ROB=0.x" - compute the LTS regression coefficients, using 0.x as a fraction of good points
+/// "SERIAL" | Runs in serial mode. By default, if ROOT is built with MT support and MT is enabled, the fit is performed in multi-thread.
+/// "MULTITHREAD" | Forces usage of multi-thread execution whenever possible.
 ///
 ///
 /// This function is used for fitting also the derived TGraph classes such as TGraphErrors or TGraphAsymmErrors.
@@ -1259,14 +1266,17 @@ TFitResultPtr TGraph::Fit(TF1 *f1, Option_t *option, Option_t *goption, Axis_t r
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-/// Fit this graph with function with name `fname`.
+/// Fit this graph with the global function named `fname`.
 ///
-/// This is a different interface to TGraph fitting using TGraph::Fit(TF1 *f1,Option_t *, Option_t *, Axis_t, Axis_t)
-/// See there for the details about fitting a TGraph.
+/// This will retrieve the function with name `fname` from ROOT's global list of functions, and use it to
+/// fit the data in the TGraph.
+/// TF1 or TF2 functions that have been created in the same ROOT session can be accessed using `fname`.
+/// Predefined functions such as gaus, expo, poln, etc. are automatically created by ROOT.
+/// @see TF1::InitStandardFunctions, TF2::InitStandardFunctions, TF3::InitStandardFunctions
 ///
-/// The parameter `fname` is the name of an already predefined function created by TF1 or TF2
-/// Predefined functions such as gaus, expo and poln are automatically
-/// created by ROOT.
+/// Note that using a global function is not thread safe. In this case, use the overload
+/// TGraph::Fit(TF1 *f1,Option_t *, Option_t *, Axis_t, Axis_t) with a locally created function.
+/// For more details about fitting a TGraph, see the same overload.
 ///
 /// The parameter `fname` can also be a formula, accepted by the linear fitter (linear parts divided
 /// by "++" sign), for example "x++sin(x)" for fitting "[0]*x+[1]*sin(x)"
@@ -2107,7 +2117,18 @@ Int_t TGraph::RemovePoint(Int_t ipoint)
 ///  - `.tsv` : tab
 ///  - `.txt` : space
 ///
-/// If option = "title" a title line is generated with the axis titles.
+/// By default file contains lines with (X, Y) coordinates. If errors are present,
+/// (X, EX, Y, EY) are written. With asymmetric errors (X, EXL, EXH, Y, EYL, EYH) are stored.
+/// If option contains "asroot" string, order of values will match such order in TGraph constructors.
+/// So one will get (X, Y, EX, EY) or (X, Y, EXL, EXH, EYL, EYH).
+///
+/// Also one can directly select that kind of errors are stored:
+///   - "errors" - (X, Y, EX, EY) will be stored
+///   - "asymmerrors" - (X, Y, EXL, EXH, EYL, EYH) will be stored
+///   - "noerrors" - just (X, Y) will be stored disregard of graph kind
+///
+/// If option contains "title" a title line is generated with the axis titles.
+
 
 void TGraph::SaveAs(const char *filename, Option_t *option) const
 {
@@ -2115,6 +2136,7 @@ void TGraph::SaveAs(const char *filename, Option_t *option) const
    TString ext = "";
    TString fname = filename;
    TString opt = option;
+   opt.ToLower();
 
    if (filename) {
       if      (fname.EndsWith(".csv")) {del = ',';  ext = "csv";}
@@ -2128,27 +2150,73 @@ void TGraph::SaveAs(const char *filename, Option_t *option) const
          Error("SaveAs", "cannot open file: %s", filename);
          return;
       }
-      if (InheritsFrom(TGraphErrors::Class()) ) {
-         if(opt.Contains("title"))
-         out << "# " << GetXaxis()->GetTitle() << "\tex\t" << GetYaxis()->GetTitle() << "\tey" << std::endl;
-         double *ex = this->GetEX();
-         double *ey = this->GetEY();
-         for(int i=0 ; i<fNpoints ; i++)
-         out << fX[i] << del << (ex?ex[i]:0) << del << fY[i] << del << (ey?ey[i]:0) << std::endl;
-      } else if (InheritsFrom(TGraphAsymmErrors::Class()) || InheritsFrom(TGraphBentErrors::Class())) {
-         if(opt.Contains("title"))
-         out << "# " << GetXaxis()->GetTitle() << "\texl\t" << "\texh\t" << GetYaxis()->GetTitle() << "\teyl" << "\teyh" << std::endl;
-         double *exl = this->GetEXlow();
-         double *exh = this->GetEXhigh();
-         double *eyl = this->GetEYlow();
-         double *eyh = this->GetEYhigh();
-         for(int i=0 ; i<fNpoints ; i++)
-         out << fX[i] << del << (exl?exl[i]:0) << del << (exh?exh[i]:0) << del << fY[i] << del << (eyl?eyl[i]:0) << del << (eyh?eyh[i]:0) << std::endl;
-      } else {
-         if(opt.Contains("title"))
-         out << "# " << GetXaxis()->GetTitle() << "\t" << GetYaxis()->GetTitle() << std::endl;
-         for (int i=0 ; i<fNpoints ; i++)
-         out << fX[i] << del << fY[i] << std::endl;
+      Bool_t store_title = opt.Contains("title");
+      Bool_t no_errors = kFALSE, plain_errors = kFALSE, asymm_erros = kFALSE;
+      Bool_t as_root = opt.Contains("asroot") || opt.Contains("native");
+      if (opt.Contains("noerrors"))
+         no_errors = kTRUE;
+      else if (opt.Contains("asymmerrors"))
+         asymm_erros = kTRUE;
+      else if (opt.Contains("errors"))
+         plain_errors = kTRUE;
+      else if (InheritsFrom("TGraphErrors"))
+         plain_errors = kTRUE;
+      else if (InheritsFrom("TGraphAsymmErrors") || InheritsFrom("TGraphBentErrors"))
+         asymm_erros = kTRUE;
+      else
+         no_errors = kTRUE;
+
+      TString xtitle, ytitle;
+      if (fHistogram) {
+         xtitle = fHistogram->GetXaxis()->GetTitle();
+         ytitle = fHistogram->GetYaxis()->GetTitle();
+      }
+      if (xtitle.IsNull())
+         xtitle = "x";
+      if (ytitle.IsNull())
+         ytitle = "y";
+
+      if (plain_errors) {
+         if(store_title) {
+            if (as_root)
+               out << "# " << xtitle << "\t" << ytitle << "\tex\tey\n";
+            else
+               out << "# " << xtitle << "\tex\t" << ytitle << "\tey\n";
+         }
+         for(int i = 0; i < fNpoints ; i++) {
+            Double_t x = GetPointX(i);
+            Double_t y = GetPointY(i);
+            Double_t ex = GetErrorX(i);
+            Double_t ey = GetErrorY(i);
+            if (as_root)
+               out << x << del << y << del <<  ex << del << ey << "\n";
+            else
+               out << x << del << ex << del << y << del << ey << "\n";
+         }
+      } else if (asymm_erros) {
+         if(store_title) {
+            if (as_root)
+               out << "# " << xtitle << "\t" << ytitle << "\texl\texh\teyl\teyh\n";
+            else
+               out << "# " << xtitle << "\texl\texh\t" << ytitle << "\teyl\teyh\n";
+         }
+         for(int i = 0; i < GetN(); i++) {
+            Double_t x = GetPointX(i);
+            Double_t y = GetPointY(i);
+            Double_t exl = GetErrorXlow(i);
+            Double_t exh = GetErrorXhigh(i);
+            Double_t eyl = GetErrorYlow(i);
+            Double_t eyh = GetErrorYhigh(i);
+            if (as_root)
+               out << x << del << y << del << exl << del << exh << del << eyl << del << eyh << "\n";
+            else
+               out << x << del << exl << del << exh << del << y << del << eyl << del << eyh << "\n";
+         }
+      } else if (no_errors) {
+         if(store_title)
+            out << "# " << xtitle << "\t" << ytitle << "\n";
+         for (Int_t i = 0 ; i < GetN(); i++)
+            out << GetPointX(i) << del << GetPointY(i) << "\n";
       }
       out.close();
       Info("SaveAs", "%s file: %s has been generated", ext.Data(), filename);

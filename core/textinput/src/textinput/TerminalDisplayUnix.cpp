@@ -103,15 +103,30 @@ namespace textinput {
   // If input is not a tty don't write in tty-mode either.
   TerminalDisplayUnix::TerminalDisplayUnix():
     TerminalDisplay(TerminalConfigUnix::Get().IsInteractive()),
-    fIsAttached(false), fNColors(16), fOutputID(STDOUT_FILENO)
+    fIsAttached(false), fNColors(16), fTTYOutputID(-1)
   {
-     if (::isatty(fileno(stdin)) && !::isatty(fOutputID)) {
-        // Display prompt, even if stdout is going somewhere else
-        fOutputID = ::open("/dev/tty", O_WRONLY);
-        SetIsTTY(true);
-    }
+     if (::isatty(fileno(stdin))) {
+        // As long as we read from a terminal, keep a handle on the controlling
+        // terminal so we can always display the prompt and the line-editing
+        // output there, even when stdout is not (or no longer) connected to it.
+        // In particular, the ".> file" meta command redirects stdout to a file;
+        // sending the prompt and the echo of typed characters into that file
+        // instead of to the terminal would leave the command line invisible and
+        // unusable, see https://github.com/root-project/root/issues/7626.
+        // WriteRawString() falls back to this descriptor whenever stdout is
+        // redirected, so only the output of the executed code follows the
+        // redirection, as expected.
+        fTTYOutputID = ::open("/dev/tty", O_WRONLY);
+        // If stdout was already redirected at startup (e.g. "root > file"),
+        // the line-editing output goes to /dev/tty, which is a terminal, so
+        // force tty-mode on. If stdout is a terminal, IsInteractive() alone
+        // decides whether we drive it interactively, as before.
+        const bool stdoutRedirected = !::isatty(STDOUT_FILENO);
+        if (fTTYOutputID != -1 && stdoutRedirected)
+           SetIsTTY(true);
+     }
 
-    HandleResizeSignal(); // needs fOutputID
+    HandleResizeSignal(); // needs fTTYOutputID
     gTerminalDisplayUnix() = this;
     signal(SIGWINCH, TerminalDisplayUnix__handleResizeSignal);
 #ifdef TCSANOW
@@ -129,9 +144,9 @@ namespace textinput {
 
   TerminalDisplayUnix::~TerminalDisplayUnix() {
     Detach();
-    if (fOutputID != STDOUT_FILENO) {
-      SYNC_OUT(fOutputID);
-      ::close(fOutputID);
+    if (fTTYOutputID != -1) {
+      SYNC_OUT(fTTYOutputID);
+      ::close(fTTYOutputID);
     }
   }
 
@@ -139,7 +154,11 @@ namespace textinput {
   TerminalDisplayUnix::HandleResizeSignal() {
 #ifdef TIOCGWINSZ
     struct winsize sz;
-    int ret = ioctl(fOutputID, TIOCGWINSZ, (char*)&sz);
+    // Query the terminal we actually write to for its size. That is stdout
+    // whenever it is a terminal; only once it is redirected (e.g. to a file,
+    // which has no window size) fall back to the controlling terminal.
+    int sizeFD = ::isatty(STDOUT_FILENO) ? STDOUT_FILENO : (fTTYOutputID != -1 ? fTTYOutputID : STDOUT_FILENO);
+    int ret = ioctl(sizeFD, TIOCGWINSZ, (char*)&sz);
     if (!ret && sz.ws_col) {
       SetWidth(sz.ws_col);
 
@@ -267,7 +286,15 @@ namespace textinput {
   /// \param[in] len length of the raw string
   void
   TerminalDisplayUnix::WriteRawString(const char *text, size_t len) {
-    if (write(fOutputID, text, len) == -1) {
+    // The prompt and line-editing output normally go to stdout. But if stdout
+    // is not (or no longer) connected to a terminal - most notably after the
+    // ".> file" meta command redirects it to a file - write to the controlling
+    // terminal instead, so the command line stays visible and usable while only
+    // the executed code's output follows the redirection (issue 7626).
+    int outputID = STDOUT_FILENO;
+    if (fTTYOutputID != -1 && !::isatty(STDOUT_FILENO))
+      outputID = fTTYOutputID;
+    if (write(outputID, text, len) == -1) {
       // Silence Ubuntu's "unused result". We don't care if it fails.
     }
   }
@@ -286,17 +313,17 @@ namespace textinput {
   TerminalDisplayUnix::Attach() {
     // set to noecho
     if (fIsAttached) return;
-    SYNC_OUT(fOutputID);
+    SYNC_OUT(STDOUT_FILENO);
     TerminalConfigUnix::Get().Attach();
     fWritePos = Pos();
-    fWriteLen = 0;
+    fWriteEnd = Pos();
     fIsAttached = true;
   }
 
   void
   TerminalDisplayUnix::Detach() {
     if (!fIsAttached) return;
-    SYNC_OUT(fOutputID);
+    SYNC_OUT(STDOUT_FILENO);
     TerminalConfigUnix::Get().Detach();
     TerminalDisplay::Detach();
     fIsAttached = false;

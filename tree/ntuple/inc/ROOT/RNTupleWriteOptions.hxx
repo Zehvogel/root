@@ -1,5 +1,4 @@
 /// \file ROOT/RNTupleWriteOptions.hxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \date 2024-02-22
 
@@ -82,7 +81,7 @@ on how large the I/O buffer can grow during writing.
 <td>`std::size_t`</td>
 <td>256</td>
 <td>
-Initially, columns start with a page of this size. The default value is chosen to accomodate at least 32 elements
+Initially, columns start with a page of this size. The default value is chosen to accommodate at least 32 elements
 of 64 bits, or 64 elements of 32 bits. If more elements are needed, pages are increased up until the byte limit
 given by the option `MaxUnzippedPageSize` or until the total page buffer limit is reached (as a sum of all page buffers).
 The total write buffer limit needs to be large enough to hold the initial pages of all columns.
@@ -263,6 +262,20 @@ public:
    void SetEnableSamePageMerging(bool val);
 
    std::uint64_t GetMaxKeySize() const { return fMaxKeySize; }
+
+   friend bool operator==(const RNTupleWriteOptions &lhs, const RNTupleWriteOptions &rhs)
+   {
+      return lhs.fCompression == rhs.fCompression && lhs.fApproxZippedClusterSize == rhs.fApproxZippedClusterSize &&
+             lhs.fMaxUnzippedClusterSize == rhs.fMaxUnzippedClusterSize &&
+             lhs.fInitialUnzippedPageSize == rhs.fInitialUnzippedPageSize &&
+             lhs.fMaxUnzippedPageSize == rhs.fMaxUnzippedPageSize && lhs.fPageBufferBudget == rhs.fPageBufferBudget &&
+             lhs.fUseBufferedWrite == rhs.fUseBufferedWrite && lhs.fUseDirectIO == rhs.fUseDirectIO &&
+             lhs.fWriteBufferSize == rhs.fWriteBufferSize && lhs.fUseImplicitMT == rhs.fUseImplicitMT &&
+             lhs.fEnablePageChecksums == rhs.fEnablePageChecksums &&
+             lhs.fEnableSamePageMerging == rhs.fEnableSamePageMerging && lhs.fMaxKeySize == rhs.fMaxKeySize;
+   }
+
+   friend bool operator!=(const RNTupleWriteOptions &lhs, const RNTupleWriteOptions &rhs) { return !(lhs == rhs); }
 };
 
 namespace Internal {

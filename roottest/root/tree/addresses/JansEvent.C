@@ -196,8 +196,9 @@ void JansEvent::reset()
     eventHeader.reset();
     bList.Clear();
 }
-#include "Riostream.h"
+
 #include "TTree.h"
+#include <iostream>
 
 void testJan() {
   {
@@ -224,7 +225,7 @@ void testJan() {
 
 
 
-#if defined(__MAKECINT__)
+#if defined(__ROOTCLING__)
 #pragma link C++ class CandidateParameters;
 #pragma link C++ class CandParametersMC;
 #pragma link C++ class LambdaParameters;

@@ -1,4 +1,4 @@
-#if !defined(__CINT__) || defined(__MAKECINT__)
+#if !defined(__CLING__) || defined(__ROOTCLING__)
 #include <TFile.h>
 #include <TTree.h>
 #include <TBranch.h>
@@ -11,7 +11,8 @@
 #include <TObjString.h>
 #include <TMap.h>
 #include <TSystem.h>
-#include <Riostream.h>
+
+#include <iostream>
 #endif
 
 class TMyPar : public TObject

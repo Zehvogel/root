@@ -50,7 +50,7 @@ function readStyleFromURL(url) {
 
    const b = d.get('batch');
    if (b !== undefined) {
-      setBatchMode(d !== 'off');
+      setBatchMode(b !== 'off');
       if (b === 'png')
          internals.batch_png = true;
    }
@@ -72,6 +72,12 @@ function readStyleFromURL(url) {
 
    if (d.has('prefer_saved_points'))
       settings.PreferSavedPoints = true;
+
+   if (d.has('tmout'))
+      settings.ServerTimeout = parseFloat(d.get('tmout'));
+
+   if (d.has('ftmout'))
+      settings.FilesTimeout = parseFloat(d.get('ftmout'));
 
    const tf1_style = d.get('tf1');
    if (tf1_style === 'curve')
@@ -264,7 +270,7 @@ async function buildGUI(gui_element, gui_kind = '') {
 
    myDiv.html(''); // clear element
 
-   const d = decodeUrl(), getSize = name => {
+   const nb = (gui_kind === 'notebook'), d = decodeUrl(), getSize = name => {
       const res = d.has(name) ? d.get(name).split('x') : [];
       if (res.length !== 2)
          return null;
@@ -279,7 +285,7 @@ async function buildGUI(gui_element, gui_kind = '') {
    else if ((gui_kind === 'nobrowser') || d.has('nobrowser') || (myDiv.attr('nobrowser') && myDiv.attr('nobrowser') !== 'false'))
       nobrowser = true;
 
-   if (myDiv.attr('ignoreurl') === 'true')
+   if (nb || (myDiv.attr('ignoreurl') === 'true'))
       settings.IgnoreUrlOptions = true;
 
    readStyleFromURL();
@@ -291,9 +297,11 @@ async function buildGUI(gui_element, gui_kind = '') {
    if (divsize)
       myDiv.style('position', 'relative').style('width', divsize[0] + 'px').style('height', divsize[1] + 'px');
    else if (!isBatchMode()) {
-      d3_select('html').style('height', '100%');
-      d3_select('body').style('min-height', '100%').style('margin', 0).style('overflow', 'hidden');
-      myDiv.style('position', 'absolute').style('left', 0).style('top', 0).style('bottom', 0).style('right', 0).style('padding', '1px');
+      if (!nb) {
+         d3_select('html').style('height', '100%');
+         d3_select('body').style('min-height', '100%').style('margin', 0).style('overflow', 'hidden');
+      }
+      myDiv.style('position', 'absolute').style('inset', '0px').style('padding', '1px');
    }
    if (canvsize) {
       settings.CanvasWidth = canvsize[0];
@@ -310,6 +318,10 @@ async function buildGUI(gui_element, gui_kind = '') {
    if (drawing || isBatchMode())
       hpainter.exclude_browser = true;
    hpainter.start_without_browser = nobrowser;
+   if (nb) {
+      hpainter.no_select = true;
+      hpainter.top_info = 'ROOT notebook';
+   }
 
    return hpainter.startGUI(myDiv).then(() => {
       if (!nobrowser)
@@ -324,7 +336,9 @@ async function buildGUI(gui_element, gui_kind = '') {
       if (d.has('websocket'))
          opt += ';websocket';
       return hpainter.display('', opt);
-   }).then(() => hpainter);
+   }).then(() => {
+      return hpainter;
+   });
 }
 
 export { buildGUI, internals, readStyleFromURL, HierarchyPainter, createMenu, closeMenu };

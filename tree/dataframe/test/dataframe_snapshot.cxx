@@ -247,6 +247,22 @@ TEST(RDFSnapshotMore, BasketSizePreservation)
    TestBasketSizePreservation();
 }
 
+// Test for default compression settings
+TEST(RDFSnapshotMore, DefaultCompressionSettings)
+{
+   struct FileGuardRAII {
+      std::string fFilename{"RDFSnapshotMore_default_compression_settings.root"};
+      std::string fTreeName{"tree"};
+      ~FileGuardRAII() { std::remove(fFilename.c_str()); }
+   } fileGuard;
+   ROOT::RDataFrame df{1};
+   df.Define("x", [] { return 42; }).Snapshot(fileGuard.fTreeName, fileGuard.fFilename, {"x"});
+
+   auto f = std::make_unique<TFile>(fileGuard.fFilename.c_str());
+   EXPECT_EQ(f->GetCompressionAlgorithm(), ROOT::RCompressionSetting::EAlgorithm::EValues::kZLIB);
+   EXPECT_EQ(f->GetCompressionLevel(), 1);
+}
+
 // fixture that provides fixed and variable sized arrays as RDF columns
 class RDFSnapshotArrays : public ::testing::Test {
 protected:
@@ -395,8 +411,8 @@ TEST_F(RDFSnapshot, Snapshot_update_same_treename)
       TestSnapshotUpdate(tdf, "snap_update_sametreenames.root", "t", "t", false);
    } catch (const std::invalid_argument &e) {
       const std::string msg =
-         "Snapshot: tree \"t\" already present in file \"snap_update_sametreenames.root\". If you want to delete the "
-         "original tree and write another, please set RSnapshotOptions::fOverwriteIfExists to true.";
+         "Snapshot: object \"t\" already present in file \"snap_update_sametreenames.root\". If you want to delete the "
+         "original object and write another, please set the 'fOverwriteIfExists' option to true in RSnapshotOptions.";
       EXPECT_EQ(e.what(), msg);
       exceptionCaught = true;
    }
@@ -445,6 +461,18 @@ void test_snapshot_options(RInterface<RLoopManager> &tdf)
 TEST_F(RDFSnapshot, Snapshot_action_with_options)
 {
    test_snapshot_options(tdf);
+}
+
+TEST_F(RDFSnapshot, Snapshot_action_warn_on_rntuple_specific_opts)
+{
+   RSnapshotOptions opts;
+   opts.fApproxZippedClusterSize = 64;
+
+   ROOT_EXPECT_WARNING(
+      tdf.Snapshot("ntuple", "snapshot_test_warn_on_rntuple_specific_opts.root", "", opts), "Snapshot",
+      "The RNTuple-specific fApproxZippedClusterSize option in RSnapshotOptions has been set, but the output format is "
+      "set to TTree, so this option won't have any effect. Use the other options available in RSnapshotOptions to "
+      "configure the output TTree. Alternatively, change fOutputFormat to snapshot to RNTuple instead.");
 }
 
 void checkSnapshotArrayFile(RResultPtr<RInterface<RLoopManager>> &df, unsigned int kNEvents)
@@ -936,13 +964,13 @@ TEST(RDFSnapshotMore, LazyNotTriggered)
                        "storing its result in a variable and for example calling the GetValue() method on it.");
 }
 
-RResultPtr<RInterface<RLoopManager, void>> ReturnLazySnapshot(const char *fname)
+RResultPtr<RInterface<RLoopManager>> ReturnLazySnapshot(const char *fname)
 {
    auto d = ROOT::RDataFrame(1);
    ROOT::RDF::RSnapshotOptions opts;
    opts.fLazy = true;
    auto res = d.Snapshot("t", fname, {"rdfentry_"}, opts);
-   RResultPtr<RInterface<RLoopManager, void>> res2 = res;
+   RResultPtr<RInterface<RLoopManager>> res2 = res;
    return res;
 }
 
@@ -1264,8 +1292,8 @@ TEST_F(RDFSnapshotMT, Snapshot_update_same_treename)
       TestSnapshotUpdate(tdf, "snap_update_sametreenames.root", "t", "t", false);
    } catch (const std::invalid_argument &e) {
       const std::string msg =
-         "Snapshot: tree \"t\" already present in file \"snap_update_sametreenames.root\". If you want to delete the "
-         "original tree and write another, please set RSnapshotOptions::fOverwriteIfExists to true.";
+         "Snapshot: object \"t\" already present in file \"snap_update_sametreenames.root\". If you want to delete the "
+         "original object and write another, please set the 'fOverwriteIfExists' option to true in RSnapshotOptions.";
       EXPECT_EQ(e.what(), msg);
       exceptionCaught = true;
    }

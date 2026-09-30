@@ -188,6 +188,17 @@ Cppyy::TCppType_t CPyCppyy::CPPInstance::GetSmartIsA() const
 }
 
 //----------------------------------------------------------------------------
+Cppyy::TCppType_t CPyCppyy::CPPInstance::GetSmartUnderlyingType() const
+{
+// The declared underlying type of the embedded smart pointer (e.g. 'Base' for
+// a std::unique_ptr<Base>). This is independent of any auto-down-cast applied
+// to the dereferenced object, and so is what must be used to decide whether the
+// smart pointer can be passed to a function expecting a particular smart type.
+    if (!IsSmart()) return (Cppyy::TCppType_t)0;
+    return SMART_CLS(this)->fUnderlyingType;
+}
+
+//----------------------------------------------------------------------------
 CPyCppyy::CI_DatamemberCache_t& CPyCppyy::CPPInstance::GetDatamemberCache()
 {
 // Return the cache for expensive data objects (and make extended as necessary)
@@ -400,19 +411,19 @@ static PySequenceMethods op_as_sequence = {
     0,                             // sq_inplace_repeat
 };
 
-std::function<PyObject *(PyObject *)> &CPPInstance::ReduceMethod() {
-   static std::function<PyObject *(PyObject *)> reducer;
+PyCFunction &CPPInstance::ReduceMethod() {
+   static PyCFunction reducer = nullptr;
    return reducer;
 }
 
-PyObject *op_reduce(PyObject *self, PyObject * /*args*/)
+PyObject *op_reduce(PyObject *self, PyObject * args)
 {
    auto &reducer = CPPInstance::ReduceMethod();
    if (!reducer) {
       PyErr_SetString(PyExc_NotImplementedError, "");
       return nullptr;
    }
-   return reducer(self);
+   return reducer(self, args);
 }
 
 
@@ -573,8 +584,17 @@ static PyObject* op_richcompare(CPPInstance* self, PyObject* other, int op)
     if (op == Py_EQ || op == Py_NE) {
     // special case for None to compare True to a null-pointer
         if ((PyObject*)other == Py_None && !self->fObject) {
-            if (op == Py_EQ) { Py_RETURN_TRUE; }
-            Py_RETURN_FALSE;
+            const char *msg =
+                "\nComparison of C++ nullptr objects with `None` is no longer supported."
+                "\n\nPreviously, `None` was treated as equivalent to a null C++ pointer, "
+                "but this led to confusing behavior where `x == None` could be True even though `x is None` was False."
+                "\n\nTo test whether a C++ object is null or not, check its truth value instead:"
+                "\n    if not x: ..."
+                "\nor use `x is None` to explicitly check for Python None."
+                "\n";
+
+            PyErr_SetString(PyExc_TypeError, msg);
+            return NULL;  // stop execution, raise TypeError
         }
 
     // use C++-side operators if available
@@ -615,7 +635,7 @@ static PyObject* op_richcompare(CPPInstance* self, PyObject* other, int op)
             CPYCPPYY_ORDERED_OPERATOR_STUB(<,  klass->fOperators->fLt, __lt__)
             break;
         case Py_LE:
-            CPYCPPYY_ORDERED_OPERATOR_STUB(<=, klass->fOperators->fLe, __ge__)
+            CPYCPPYY_ORDERED_OPERATOR_STUB(<=, klass->fOperators->fLe, __le__)
             break;
         case Py_GT:
             CPYCPPYY_ORDERED_OPERATOR_STUB(>,  klass->fOperators->fGt, __gt__)
@@ -1116,12 +1136,7 @@ PyTypeObject CPPInstance_Type = {
 #if PY_VERSION_HEX >= 0x03080000
     , 0                           // tp_vectorcall
 #endif
-#if PY_VERSION_HEX >= 0x030c0000
-    , 0                           // tp_watched
-#endif
-#if PY_VERSION_HEX >= 0x030d0000
-    , 0                           // tp_versions_used
-#endif
+    CPYCPPYY_PYTYPE_TAIL
 };
 
 } // namespace CPyCppyy

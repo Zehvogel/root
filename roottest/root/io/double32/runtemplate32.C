@@ -1,7 +1,7 @@
 #include "runtemplate32.h"
 #include "longExample.h"
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class WithDouble+;
 #pragma link C++ class MyVector<Double32_t>+;
 #pragma link C++ class MyVector<float>+;
@@ -12,9 +12,10 @@
 #include "TStreamerInfo.h"
 #include "TROOT.h"
 #include "TRealData.h"
-#include "Riostream.h"
 #include "TDataMember.h"
 #include "TFile.h"
+
+#include <iostream>
 
 int runtemplate32 ()
 {

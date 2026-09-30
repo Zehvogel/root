@@ -1,12 +1,19 @@
 #include "ntuple_test.hxx"
+#include "SimpleCollectionProxy.hxx"
 
 #include <TMath.h>
 #include <TObject.h>
 #include <TRef.h>
 #include <TRotation.h>
+#include <TBuffer.h>
+#include <TVirtualStreamerInfo.h>
 
 #include <memory>
 #include <sstream>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace {
 class RNoDictionary {};
@@ -253,12 +260,14 @@ TEST(RNTuple, TClassReadRules)
       auto ptrOldCoord = model->MakeField<OldCoordinates>("oldCoord");
       auto ptrLowPrecisionFloat = model->MakeField<LowPrecisionFloatWithIORules>("lowPrecisionFloat");
       auto ptrOldName = model->MakeField<OldName<OldName<int>>>("rename");
+      auto ptrOldNameVersionChange = model->MakeField<OldName<float>>("renameVersionChange");
       auto ptrWithSource = model->MakeField<StructWithSourceStruct>("withSource");
       ptrCoord->fX = ptrOldCoord->fOldX = 1.0;
       ptrCoord->fY = ptrOldCoord->fOldY = 1.0;
       ptrLowPrecisionFloat->fFoo = 1.0;
       ptrLowPrecisionFloat->fLast8BitsZero = last8BitsZero;
       ptrOldName->fValue.fValue = 42;
+      ptrOldNameVersionChange->fValue = 1.0;
       // The following two members are transient and should not be stored.
       ptrWithSource->fSource.fTransient = 1;
       ptrWithSource->fTransient = 2;
@@ -315,6 +324,10 @@ TEST(RNTuple, TClassReadRules)
 
    auto viewRename = reader->GetView<NewName<OldName<int>>>("rename");
    EXPECT_EQ(42, viewRename(0).fValue.fValue);
+
+   EXPECT_NE(ROOT::RField<OldName<float>>("").GetTypeVersion(), ROOT::RField<NewName<float>>("").GetTypeVersion());
+   auto viewRenameVersionChange = reader->GetView<NewName<float>>("renameVersionChange");
+   EXPECT_FLOAT_EQ(1.0, viewRenameVersionChange(0).fValue);
 }
 
 // Adjusted from
@@ -370,4 +383,171 @@ TEST(RNTuple, PolymorphicPointer)
       ptr->reset(new PolymorphicDerived);
       EXPECT_THROW(writer->Fill(), ROOT::RException);
    }
+}
+
+TEST(RNTuple, TClassMetaName)
+{
+   auto f1 = ROOT::RClassField("f", "EdmWrapper<long long>");
+   EXPECT_STREQ("EdmWrapper<Long64_t>", f1.GetClass()->GetName());
+
+   auto f2 = std::make_unique<ROOT::RField<EdmWrapper<long long>>>("f");
+   EXPECT_STREQ("EdmWrapper<Long64_t>", static_cast<ROOT::RClassField *>(f2.get())->GetClass()->GetName());
+
+   auto f3 = RFieldBase::Create("f", "EdmWrapper<long long>").Unwrap();
+   EXPECT_STREQ("EdmWrapper<Long64_t>", static_cast<ROOT::RClassField *>(f3.get())->GetClass()->GetName());
+
+   auto f4 = RFieldBase::Create("f", "EdmContainer").Unwrap();
+   EXPECT_STREQ("EdmWrapper<Long64_t>",
+                static_cast<const ROOT::RClassField *>(f4->GetConstSubfields()[0])->GetClass()->GetName());
+
+   SimpleCollectionProxy<StructUsingCollectionProxy<Long64_t>> proxy;
+   auto cl = TClass::GetClass("StructUsingCollectionProxy<Long64_t>");
+   cl->CopyCollectionProxy(proxy);
+
+   auto f5 = std::make_unique<ROOT::RField<StructUsingCollectionProxy<Long64_t>>>("f");
+   EXPECT_TRUE(dynamic_cast<ROOT::RProxiedCollectionField *>(f5.get()));
+   EXPECT_EQ("StructUsingCollectionProxy<Long64_t>", f5->GetTypeAlias());
+
+   ROOT::RStreamerField f6("f", "EdmWrapper<long long>");
+   EXPECT_STREQ("EdmWrapper<Long64_t>", f6.GetClass()->GetName());
+   EXPECT_EQ("EdmWrapper<Long64_t>", f6.GetTypeAlias());
+   auto clone = f6.Clone("f");
+   auto streamerFieldPtr = static_cast<ROOT::RStreamerField *>(clone.get());
+   EXPECT_STREQ("EdmWrapper<Long64_t>", streamerFieldPtr->GetClass()->GetName());
+   EXPECT_EQ("EdmWrapper<Long64_t>", streamerFieldPtr->GetTypeAlias());
+}
+
+TEST(RNTuple, StreamerInfoRecords)
+{
+   // Every testee consists of the type stored on disk, the expected streamer info records, and the expected type alias
+   std::vector<std::tuple<std::string, std::vector<std::string>, std::string>> testees{
+      {"float", {}, ""},
+      {"std::vector<float>", {}, ""},
+      {"std::pair<float, float>", {}, ""},
+      {"std::map<int, float>", {}, ""},
+      {"CustomStruct", {"CustomStruct"}, ""},
+      {"std::vector<CustomStruct>", {"CustomStruct"}, ""},
+      {"std::map<int, CustomStruct>", {"CustomStruct"}, ""},
+      {"DerivedA", {"DerivedA", "CustomStruct"}, ""},
+      {"std::pair<CustomStruct, DerivedA>", {"DerivedA", "CustomStruct"}, ""},
+      {"std::vector<EdmWrapper<long long>>", {"EdmWrapper<Long64_t>"}, "std::vector<EdmWrapper<Long64_t>>"},
+      {"ROOT::RVec<EdmWrapper<long long>>", {"EdmWrapper<Long64_t>"}, "ROOT::VecOps::RVec<EdmWrapper<Long64_t>>"},
+      {"EdmWrapper<long long>", {"EdmWrapper<Long64_t>"}, "EdmWrapper<Long64_t>"},
+      {"EdmWrapper<map<int, EdmContent<float, Long64_t> > >",
+       {"EdmWrapper<map<int,EdmContent<float,Long64_t> > >", "EdmContent<float,Long64_t>"},
+       "EdmWrapper<std::map<std::int32_t,EdmContent<float,Long64_t>>>"},
+      {"EdmContainer", {"EdmContainer", "EdmWrapper<Long64_t>"}, ""},
+      {"EdmWrapper<long long>::Inner", {"EdmWrapper<Long64_t>::Inner"}, "EdmWrapper<Long64_t>::Inner"},
+      {"EdmContainer::EdmWrapperLong64_t", {"EdmWrapper<Long64_t>"}, "EdmContainer::EdmWrapperLong64_t"},
+      {"TRotation", {"TRotation"}, ""}};
+
+   for (const auto &t : testees) {
+      FileRaii fileGuard("test_ntuple_streamer_info_records.root");
+
+      {
+         auto model = ROOT::RNTupleModel::Create();
+         if (std::get<0>(t) == "TRotation") {
+            model->AddField(std::make_unique<ROOT::RStreamerField>("f", std::get<0>(t)));
+         } else {
+            model->AddField(ROOT::RFieldBase::Create("f", std::get<0>(t)).Unwrap());
+         }
+         auto writer = ROOT::RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
+      }
+
+      auto f = std::unique_ptr<TFile>(TFile::Open(fileGuard.GetPath().c_str()));
+      ASSERT_TRUE(f && !f->IsZombie());
+
+      std::unordered_set<std::string> expectedInfos{std::get<1>(t).begin(), std::get<1>(t).end()};
+      expectedInfos.insert("ROOT::RNTuple");
+      for (const auto info : TRangeDynCast<TVirtualStreamerInfo>(*f->GetStreamerInfoList())) {
+         auto itr = expectedInfos.find(info->GetName());
+         if (itr == expectedInfos.end()) {
+            FAIL() << "unexpected streamer info: " << info->GetName();
+            continue;
+         }
+         expectedInfos.erase(itr);
+      }
+      EXPECT_TRUE(expectedInfos.empty());
+
+      // Make sure we can reconstruct the fields
+      auto reader = RNTupleReader::Open("ntpl", fileGuard.GetPath());
+      EXPECT_EQ(std::get<2>(t), reader->GetModel().GetConstField("f").GetTypeAlias());
+      if (auto field = dynamic_cast<const ROOT::RClassField *>(&reader->GetModel().GetConstField("f"))) {
+         EXPECT_EQ(std::get<1>(t)[0], field->GetClass()->GetName());
+      }
+   }
+}
+
+// Detect custom streamers set on class members at runtime via TClass::SetMemberStreamer.
+TEST(RNTuple, MemberWithCustomStreamer)
+{
+   auto cl = TClass::GetClass("MemberWithCustomStreamer");
+   ASSERT_NE(cl, nullptr);
+
+   // CanSplit() should be true initially (it only checks compile-time properties)
+   EXPECT_TRUE(cl->CanSplit());
+
+   // Without member streamer: field creation succeeds
+   RFieldBase::Create("f", "MemberWithCustomStreamer").Unwrap();
+
+   // Set a custom streamer on the "fCustom" member at runtime
+   cl->SetMemberStreamer("fCustom", [](TBuffer &b, void *obj, Int_t) {
+      int *val = static_cast<int *>(obj);
+      if (b.IsReading()) {
+         b >> *val;
+      } else {
+         b << *val;
+      }
+   });
+
+   // CanSplit() remains true because you can still split (in TTree) even if a data member has a custom member.
+   EXPECT_TRUE(cl->CanSplit());
+
+   // After setting member streamer: field creation should throw
+   EXPECT_THROW(RFieldBase::Create("f", "MemberWithCustomStreamer").Unwrap(), ROOT::RException);
+}
+
+TEST(RNTuple, AlignmentCornerCases)
+{
+   // Alignment determined by transient member
+   EXPECT_EQ(alignof(AlignmentDeterminedByTransientMember),
+             RFieldBase::Create("", "AlignmentDeterminedByTransientMember").Unwrap()->GetAlignment());
+
+   // Respect custom alignment
+   EXPECT_EQ(alignof(AlignedAs), RFieldBase::Create("", "AlignedAs").Unwrap()->GetAlignment());
+   EXPECT_EQ(sizeof(AlignedAs), RFieldBase::Create("", "AlignedAs").Unwrap()->GetValueSize());
+   EXPECT_EQ(8u, RFieldBase::Create("", "AlignedAs").Unwrap()->GetValueSize());
+
+   // Handling of over-aligned types
+   auto f = RFieldBase::Create("", "AlignmentEnvelope").Unwrap();
+   EXPECT_GT(alignof(AlignmentEnvelope), sizeof(std::max_align_t));
+   EXPECT_EQ(alignof(AlignmentEnvelope), f->GetAlignment());
+   std::unique_ptr<AlignmentEnvelope> ptr(f->CreateObject<AlignmentEnvelope>().release());
+   EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(ptr.get()) % alignof(AlignmentEnvelope));
+
+   f = RFieldBase::Create("", "std::vector<AlignmentEnvelope>").Unwrap();
+   auto vecPtr = f->CreateObject<std::vector<AlignmentEnvelope>>().release();
+   EXPECT_TRUE(vecPtr->data() == nullptr ||
+               reinterpret_cast<std::uintptr_t>(vecPtr->data()) % alignof(AlignmentEnvelope) == 0);
+
+   auto res = RFieldBase::Create("", "ROOT::RVec<OverAligned>");
+   EXPECT_FALSE(res);
+   EXPECT_THAT(res.GetError()->GetReport(), ::testing::HasSubstr("RVec does not support over-aligned types"));
+
+   FileRaii fileGuard("test_ntuple_alignment_corner_cases.root");
+   {
+      auto model = ROOT::RNTupleModel::Create();
+      auto p = model->MakeField<AlignmentEnvelope>("f");
+      auto writer = ROOT::RNTupleWriter::Recreate(std::move(model), "ntpl", fileGuard.GetPath());
+      p->fVec.push_back(OverAligned{1});
+      writer->Fill();
+   }
+   auto reader = ROOT::RNTupleReader::Open("ntpl", fileGuard.GetPath());
+   auto bulk = reader->GetModel().CreateBulk("f");
+   auto bulkPtr = bulk.ReadBulk(ROOT::RNTupleLocalRange(0, 0, 1));
+   EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(bulkPtr) % alignof(AlignmentEnvelope));
+
+   auto view = reader->GetView<AlignmentEnvelope>("f");
+   EXPECT_EQ(1u, view(0).fVec.size());
+   EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(view(0).fVec.data()) % alignof(OverAligned));
 }

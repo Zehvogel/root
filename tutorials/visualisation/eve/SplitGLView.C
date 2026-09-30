@@ -23,7 +23,6 @@
 #include "TGLLogicalShape.h"
 #include "HelpText.h"
 #include "TClass.h"
-#include "Riostream.h"
 #include "TEnv.h"
 #include "TGListTree.h"
 #include "TOrdCollection.h"
@@ -1376,7 +1375,7 @@ void SplitGLView::UpdateSummary()
    }
 }
 
-#ifdef __CINT__
+#ifdef __CLING__
 void SplitGLView()
 {
    printf("This script is used via ACLiC by the macro \"alice_esd_split.C\"\n");

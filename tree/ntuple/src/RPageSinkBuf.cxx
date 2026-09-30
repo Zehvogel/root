@@ -1,5 +1,4 @@
 /// \file RPageSinkBuf.cxx
-/// \ingroup NTuple
 /// \author Jakob Blomer <jblomer@cern.ch>
 /// \author Max Orok <maxwellorok@gmail.com>
 /// \author Javier Lopez-Gomez <javier.lopez.gomez@cern.ch>
@@ -28,7 +27,6 @@ using ROOT::Experimental::Detail::RNTupleMetrics;
 using ROOT::Experimental::Detail::RNTuplePlainCounter;
 using ROOT::Experimental::Detail::RNTuplePlainTimer;
 using ROOT::Experimental::Detail::RNTupleTickCounter;
-using ROOT::Internal::MakeUninitArray;
 
 void ROOT::Internal::RPageSinkBuf::RColumnBuf::DropBufferedPages()
 {
@@ -109,7 +107,16 @@ void ROOT::Internal::RPageSinkBuf::UpdateSchema(const ROOT::Internal::RNTupleMod
    auto cloneAddField = [&](const ROOT::RFieldBase *field) {
       auto cloned = field->Clone(field->GetFieldName());
       auto p = &(*cloned);
-      fInnerModel->AddField(std::move(cloned));
+
+      auto parent = field->GetParent();
+      assert(parent);
+      if (typeid(*parent) != typeid(RFieldZero)) {
+         auto &innerParent = fInnerModel->GetMutableField(parent->GetQualifiedFieldName());
+         assert(dynamic_cast<RRecordField *>(&innerParent));
+         AddItemToRecord(static_cast<RRecordField &>(innerParent), std::move(cloned));
+      } else {
+         fInnerModel->AddField(std::move(cloned));
+      }
       return p;
    };
    auto cloneAddProjectedField = [&](ROOT::RFieldBase *field) {
@@ -175,7 +182,13 @@ void ROOT::Internal::RPageSinkBuf::CommitPage(ColumnHandle_t columnHandle, const
       }
    };
 
-   if (!fTaskScheduler) {
+   // If we already buffer more uncompressed bytes than the approximate zipped cluster size, we assume there is enough
+   // work for other threads to pick up. This limits the buffer usage when sealing / compression tasks are not processed
+   // fast enough, and heuristically reduces the memory usage, especially for big compression factors.
+   std::size_t bufferedUncompressed = fBufferedUncompressed.load();
+   bool enoughWork = bufferedUncompressed > GetWriteOptions().GetApproxZippedClusterSize();
+
+   if (!fTaskScheduler || enoughWork) {
       allocateBuf();
       // Seal the page right now, avoiding the allocation and copy, but making sure that the page buffer is not aliased.
       RSealPageConfig config;
@@ -194,16 +207,25 @@ void ROOT::Internal::RPageSinkBuf::CommitPage(ColumnHandle_t columnHandle, const
       return;
    }
 
+   // We will buffer the uncompressed page. Unless work is consumed fast enough, the next page might be compressed
+   // directly.
+   fBufferedUncompressed += page.GetNBytes();
+
    // TODO avoid frequent (de)allocations by holding on to allocated buffers in RColumnBuf
    zipItem.fPage = fPageAllocator->NewPage(page.GetElementSize(), page.GetNElements());
    // make sure the page is aware of how many elements it will have
    zipItem.fPage.GrowUnchecked(page.GetNElements());
+   assert(zipItem.fPage.GetNBytes() == page.GetNBytes());
    memcpy(zipItem.fPage.GetBuffer(), page.GetBuffer(), page.GetNBytes());
 
    fCounters->fParallelZip.SetValue(1);
    // Thread safety: Each thread works on a distinct zipItem which owns its
    // compression buffer.
    fTaskScheduler->AddTask([this, &zipItem, &sealedPage, &element, allocateBuf, shrinkSealedPage] {
+      // The task will consume the uncompressed page. Decrease the atomic counter early so that more work has arrived
+      // when we are done.
+      fBufferedUncompressed -= zipItem.fPage.GetNBytes();
+
       allocateBuf();
       RSealPageConfig config;
       config.fPage = &zipItem.fPage;
@@ -238,9 +260,10 @@ void ROOT::Internal::RPageSinkBuf::CommitSealedPageV(
 // We implement both StageCluster() and CommitCluster() because we can call CommitCluster() on the inner sink more
 // efficiently in a single critical section. For parallel writing, it also guarantees that we produce a fully sequential
 // file.
-void ROOT::Internal::RPageSinkBuf::FlushClusterImpl(std::function<void(void)> FlushClusterFn)
+void ROOT::Internal::RPageSinkBuf::FlushClusterImpl(const std::function<void(void)> &FlushClusterFn)
 {
    WaitForAllTasks();
+   assert(fBufferedUncompressed == 0 && "all buffered pages should have been processed");
 
    std::vector<RSealedPageGroup> toCommit;
    toCommit.reserve(fBufferedColumns.size());
@@ -294,14 +317,25 @@ void ROOT::Internal::RPageSinkBuf::CommitClusterGroup()
    fInnerSink->CommitClusterGroup();
 }
 
-void ROOT::Internal::RPageSinkBuf::CommitDatasetImpl()
+ROOT::Internal::RNTupleLink ROOT::Internal::RPageSinkBuf::CommitDatasetImpl()
 {
    RPageSink::RSinkGuard g(fInnerSink->GetSinkGuard());
    RNTuplePlainTimer timer(fCounters->fTimeWallCriticalSection, fCounters->fTimeCpuCriticalSection);
-   fInnerSink->CommitDataset();
+   return fInnerSink->CommitDataset();
 }
 
 ROOT::Internal::RPage ROOT::Internal::RPageSinkBuf::ReservePage(ColumnHandle_t columnHandle, std::size_t nElements)
 {
    return fInnerSink->ReservePage(columnHandle, nElements);
+}
+
+std::unique_ptr<ROOT::Internal::RPageSink>
+ROOT::Internal::RPageSinkBuf::CloneAsHidden(std::string_view name, const RNTupleWriteOptions &opts) const
+{
+   return fInnerSink->CloneAsHidden(name, opts);
+}
+
+void ROOT::Internal::RPageSinkBuf::CommitAttributeSet(std::string_view attrSetName, const RNTupleLink &attrAnchorInfo)
+{
+   fInnerSink->CommitAttributeSet(attrSetName, attrAnchorInfo);
 }

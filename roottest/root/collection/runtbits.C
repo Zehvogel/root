@@ -1,8 +1,8 @@
 #include "TBits.h"
-#include "Riostream.h"
 #include "TRandom.h"
 
-#ifndef __CINT__
+#include <iostream>
+#ifndef __CLING__
 #include <bitset>
 using namespace std;
 #endif

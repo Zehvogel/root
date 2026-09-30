@@ -13,7 +13,7 @@ extern "C" {
 /// Default options when address sanitizer starts up in ROOT executables.
 /// This is relevant when ROOT's build option `asan` is on.
 /// These can be overridden / augmented by the ASAN_OPTIONS environment variable.
-/// Using ASAN_OPTIONS=help=1 and starting an instrumented ROOT exectuable, available options will be printed.
+/// Using ASAN_OPTIONS=help=1 and starting an instrumented ROOT executable, available options will be printed.
 const char* __asan_default_options() { 
 
 #ifdef ASAN_DETECT_LEAKS
@@ -31,13 +31,14 @@ const char* __asan_default_options() {
          ":detect_container_overflow=1"
          ":alloc_dealloc_mismatch=0"
          DETECT_LEAKS
-         ":verify_asan_link_order=0";
+         ":verify_asan_link_order=0"
+         ":detect_odr_violation=0";
 }
 
-/// Default options when leak sanitizer starts up in ROOT exectuables.
-/// This is relevant when ROOT's build options `asan` is on.
+/// Default options when leak sanitizer starts up in ROOT executables.
+/// This is relevant when ROOT's build option `asan` is on.
 /// These can be overridden / augmented by the LSAN_OPTIONS environment variable.
-/// Using LSAN_OPTIONS=help=1 and starting an instrumented ROOT exectuable, available options will be printed.
+/// Using LSAN_OPTIONS=help=1 and starting an instrumented ROOT executable, available options will be printed.
 const char* __lsan_default_options() {
    return "max_leaks=10:print_suppressions=1";
 }

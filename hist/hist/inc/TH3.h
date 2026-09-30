@@ -28,6 +28,11 @@
 class TH2D;
 class TProfile2D;
 
+#if defined R__B64 && defined __cpp_lib_atomic_ref
+// ROOT-20834 Atomic_ref on 32 bit can fail because of alignment problems
+#define TH3D_FILL_THREADSAFE
+#endif
+
 namespace ROOT::Internal {
 /// Entrypoint for thread-safe filling from RDataFrame.
 template <typename T, typename... Args>
@@ -144,23 +149,24 @@ public:
            void     SetBinContent(Int_t bin, Int_t, Double_t content) override { SetBinContent(bin, content); }
            void     SetBinContent(Int_t binx, Int_t biny, Int_t binz, Double_t content) override { SetBinContent(GetBin(binx, biny, binz), content); }
    virtual void     SetShowProjection(const char *option="xy",Int_t nbins=1);   // *MENU*
+   virtual TH1     *ShowBackground3D(Int_t nIterX = 20, Int_t nIterY = 20, Int_t nIterZ = 20, Option_t *option = "same");
 
 protected:
 
    virtual TH1D    *DoProject1D(const char* name, const char * title, int imin1, int imax1, int imin2, int imax2,
                                 const TAxis* projAxis, const TAxis * axis1, const TAxis * axis2, Option_t * option) const;
    virtual TH1D    *DoProject1D(const char *name, const char *title, const TAxis *projAxis, const TAxis *axis1,
-                                const TAxis *axis2, bool computeErrors, bool originalRange, bool useUF, bool useOF) const;
+                                const TAxis *axis2, bool computeErrors, bool originalRange, bool useUF, bool useOF, bool useWidth) const;
    virtual TH2D    *DoProject2D(const char* name, const char * title, const TAxis* projX, const TAxis* projY,
-                                bool computeErrors, bool originalRange, bool useUF, bool useOF) const;
+                                bool computeErrors, bool originalRange, bool useUF, bool useOF, bool useWidth) const;
    virtual TProfile2D *DoProjectProfile2D(const char* name, const char * title, const TAxis* projX, const TAxis* projY,
-                                           bool originalRange, bool useUF, bool useOF) const;
+                                           bool originalRange, bool useUF, bool useOF, bool useWidth) const;
 
    // these functions are need to be used inside TProfile3D::DoProjectProfile2D
    static TH1D     *DoProject1D(const TH3 & h, const char* name, const char * title, const TAxis* projX,
-                                bool computeErrors, bool originalRange, bool useUF, bool useOF);
+                                bool computeErrors, bool originalRange, bool useUF, bool useOF, bool useWidth);
    static TH2D     *DoProject2D(const TH3 & h, const char* name, const char * title, const TAxis* projX, const TAxis* projY,
-                                bool computeErrors, bool originalRange, bool useUF, bool useOF);
+                                bool computeErrors, bool originalRange, bool useUF, bool useOF, bool useWidth);
 
    ClassDefOverride(TH3,6)  //3-Dim histogram base class
 };
@@ -343,7 +349,7 @@ public:
 
 protected:
    Double_t RetrieveBinContent(Int_t bin) const override { return Double_t (fArray[bin]); }
-   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Int_t (content); }
+   void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = Long64_t (content); }
 
    ClassDefOverride(TH3L,0)  //3-Dim histograms (one 64 bit integer per channel)
 };
@@ -454,7 +460,7 @@ protected:
            Double_t RetrieveBinContent(Int_t bin) const override { return fArray[bin]; }
            void     UpdateBinContent(Int_t bin, Double_t content) override { fArray[bin] = content; }
 private:
-#ifdef __cpp_lib_atomic_ref
+#ifdef TH3D_FILL_THREADSAFE
            void FillThreadSafe(Double_t x, Double_t y, Double_t z, Double_t w = 1.);
            template <typename T, typename... Args>
            friend auto ROOT::Internal::FillThreadSafe(T &histo, Args... args)

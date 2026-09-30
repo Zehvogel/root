@@ -1,6 +1,5 @@
 /**
  \file ROOT/RDF/ActionHelpers.hxx
- \ingroup dataframe
  \author Enrico Guiraud, CERN
  \author Danilo Piparo, CERN
  \date 2016-12
@@ -31,15 +30,28 @@
 #include "TObject.h"
 #include "ROOT/RDF/RActionImpl.hxx"
 #include "ROOT/RDF/RMergeableValue.hxx"
+#include <cmath>
+#include <cstddef>
+#include <cstdio>
+
+#include "RConfigure.h" // for R__HAS_ROOT7
+#ifdef R__HAS_ROOT7
+#include <ROOT/RHist.hxx>
+#include <ROOT/RHistConcurrentFiller.hxx>
+#include <ROOT/RHistEngine.hxx>
+#include <ROOT/RWeight.hxx>
+#endif
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <type_traits>
 #include <utility> // std::index_sequence
 #include <vector>
@@ -150,6 +162,12 @@ public:
    {
       if (!fReturnEmptyReport)
          fNode->Report(*fReport);
+   }
+
+   std::unique_ptr<RMergeableValueBase> GetMergeableValue() const final
+   {
+      auto cutinfo_vec = fReport->fCutInfos;
+      return std::make_unique<RMergeableReport>(*fReport, cutinfo_vec);
    }
 
    std::string GetActionName() { return "Report"; }
@@ -311,6 +329,44 @@ std::size_t GetSize(const T &val)
    }
 }
 
+// trait class to implement looping over data containers
+template <typename Helper>
+class R__CLING_PTRCHECK(off) ExecLoopTrait {
+private:
+   template <typename... Iterators>
+   void ExecLoop(unsigned int slot, std::size_t elements, Iterators... its)
+   {
+      for (std::size_t i = 0; i < elements; i++) {
+         Exec(slot, *its...);
+         (std::advance(its, 1), ...);
+      }
+   }
+
+public:
+   template <typename... ColumnTypes>
+   void Exec(unsigned int slot, const ColumnTypes &...columnValues)
+   {
+      if constexpr (std::disjunction_v<IsDataContainer<ColumnTypes>...>) {
+         constexpr std::array<bool, sizeof...(ColumnTypes)> isContainer{IsDataContainer<ColumnTypes>::value...};
+         constexpr std::size_t firstContainerIdx = FindIdxTrue(isContainer);
+         std::array<std::size_t, sizeof...(columnValues)> sizes = {{GetSize(columnValues)...}};
+         std::size_t elements = 0;
+         for (std::size_t i = 0; i < isContainer.size(); i++) {
+            if (isContainer[i]) {
+               if (i == firstContainerIdx) {
+                  elements = sizes[i];
+               } else if (elements != sizes[i]) {
+                  throw std::runtime_error("Cannot fill values in containers of different sizes.");
+               }
+            }
+         }
+         ExecLoop(slot, elements, MakeBegin(columnValues)...);
+      } else {
+         static_cast<Helper *>(this)->ExecSingle(slot, columnValues...);
+      }
+   }
+};
+
 // Helpers for dealing with histograms and similar:
 template <typename H, typename = decltype(std::declval<H>().Reset())>
 void ResetIfPossible(H *h)
@@ -382,14 +438,14 @@ public:
    void InitTask(TTreeReader *, unsigned int) {}
 
    // no container arguments
-   template <typename... ValTypes, std::enable_if_t<!Disjunction<IsDataContainer<ValTypes>...>::value, int> = 0>
+   template <typename... ValTypes, std::enable_if_t<!std::disjunction<IsDataContainer<ValTypes>...>::value, int> = 0>
    auto Exec(unsigned int slot, const ValTypes &...x) -> decltype(fObjects[slot]->Fill(x...), void())
    {
       fObjects[slot]->Fill(x...);
    }
 
    // at least one container argument
-   template <typename... Xs, std::enable_if_t<Disjunction<IsDataContainer<Xs>...>::value, int> = 0>
+   template <typename... Xs, std::enable_if_t<std::disjunction<IsDataContainer<Xs>...>::value, int> = 0>
    auto Exec(unsigned int slot, const Xs &...xs) -> decltype(fObjects[slot]->Fill(*MakeBegin(xs)...), void())
    {
       // array of bools keeping track of which inputs are containers
@@ -468,6 +524,130 @@ public:
       return FillHelper(result, fObjects.size());
    }
 };
+
+#ifdef R__HAS_ROOT7
+template <typename BinContentType, bool WithWeight = false>
+class R__CLING_PTRCHECK(off) RHistFillHelper : public RActionImpl<RHistFillHelper<BinContentType, WithWeight>>,
+                                               public ExecLoopTrait<RHistFillHelper<BinContentType, WithWeight>> {
+public:
+   using Result_t = ROOT::Experimental::RHist<BinContentType>;
+
+private:
+   std::unique_ptr<ROOT::Experimental::RHistConcurrentFiller<BinContentType>> fFiller;
+   std::vector<std::shared_ptr<ROOT::Experimental::RHistFillContext<BinContentType>>> fContexts;
+
+public:
+   RHistFillHelper(std::shared_ptr<ROOT::Experimental::RHist<BinContentType>> h, unsigned int nSlots)
+      : fFiller(new ROOT::Experimental::RHistConcurrentFiller<BinContentType>(h)), fContexts(nSlots)
+   {
+      for (unsigned int i = 0; i < nSlots; i++) {
+         fContexts[i] = fFiller->CreateFillContext();
+      }
+   }
+   RHistFillHelper(const RHistFillHelper &) = delete;
+   RHistFillHelper(RHistFillHelper &&) = default;
+   RHistFillHelper &operator=(const RHistFillHelper &) = delete;
+   RHistFillHelper &operator=(RHistFillHelper &&) = default;
+   ~RHistFillHelper() = default;
+
+   std::shared_ptr<Result_t> GetResultPtr() const { return fFiller.GetHist(); }
+
+   void Initialize() {}
+   void InitTask(TTreeReader *, unsigned int) {}
+
+   template <typename... ColumnTypes, const std::size_t... I>
+   void
+   ExecWithWeight(unsigned int slot, const std::tuple<const ColumnTypes &...> &columnValues, std::index_sequence<I...>)
+   {
+      // Build a tuple of const references with the actual arguments, stripping the weight and avoiding copies.
+      std::tuple<const std::tuple_element_t<I, std::tuple<ColumnTypes...>> &...> args(std::get<I>(columnValues)...);
+      ROOT::Experimental::RWeight weight(std::get<sizeof...(ColumnTypes) - 1>(columnValues));
+      fContexts[slot]->Fill(args, weight);
+   }
+
+   template <typename... ColumnTypes>
+   void ExecSingle(unsigned int slot, const ColumnTypes &...columnValues)
+   {
+      if constexpr (WithWeight) {
+         auto t = std::forward_as_tuple(columnValues...);
+         ExecWithWeight(slot, t, std::make_index_sequence<sizeof...(ColumnTypes) - 1>());
+      } else {
+         fContexts[slot]->Fill(columnValues...);
+      }
+   }
+
+   void Finalize()
+   {
+      for (auto &&context : fContexts) {
+         context->Flush();
+      }
+   }
+
+   RHistFillHelper MakeNew(void *newResult, std::string_view /*variation*/ = "nominal")
+   {
+      auto &result = *static_cast<std::shared_ptr<Result_t> *>(newResult);
+      result->Clear();
+      return RHistFillHelper(result, fContexts.size());
+   }
+
+   std::string GetActionName() { return "Hist"; }
+};
+
+template <typename BinContentType, bool WithWeight = false>
+class R__CLING_PTRCHECK(off) RHistEngineFillHelper
+   : public RActionImpl<RHistEngineFillHelper<BinContentType, WithWeight>>,
+     public ExecLoopTrait<RHistEngineFillHelper<BinContentType, WithWeight>> {
+public:
+   using Result_t = ROOT::Experimental::RHistEngine<BinContentType>;
+
+private:
+   std::shared_ptr<Result_t> fHist;
+
+public:
+   RHistEngineFillHelper(std::shared_ptr<ROOT::Experimental::RHistEngine<BinContentType>> h) : fHist(h) {}
+   RHistEngineFillHelper(const RHistEngineFillHelper &) = delete;
+   RHistEngineFillHelper(RHistEngineFillHelper &&) = default;
+   RHistEngineFillHelper &operator=(const RHistEngineFillHelper &) = delete;
+   RHistEngineFillHelper &operator=(RHistEngineFillHelper &&) = default;
+   ~RHistEngineFillHelper() = default;
+
+   std::shared_ptr<Result_t> GetResultPtr() const { return fHist; }
+
+   void Initialize() {}
+   void InitTask(TTreeReader *, unsigned int) {}
+
+   template <typename... ColumnTypes, const std::size_t... I>
+   void ExecWithWeight(const std::tuple<const ColumnTypes &...> &columnValues, std::index_sequence<I...>)
+   {
+      // Build a tuple of const references with the actual arguments, stripping the weight and avoiding copies.
+      std::tuple<const std::tuple_element_t<I, std::tuple<ColumnTypes...>> &...> args(std::get<I>(columnValues)...);
+      ROOT::Experimental::RWeight weight(std::get<sizeof...(ColumnTypes) - 1>(columnValues));
+      fHist->FillAtomic(args, weight);
+   }
+
+   template <typename... ColumnTypes>
+   void ExecSingle(unsigned int, const ColumnTypes &...columnValues)
+   {
+      if constexpr (WithWeight) {
+         auto t = std::forward_as_tuple(columnValues...);
+         ExecWithWeight(t, std::make_index_sequence<sizeof...(ColumnTypes) - 1>());
+      } else {
+         fHist->FillAtomic(columnValues...);
+      }
+   }
+
+   void Finalize() {}
+
+   RHistEngineFillHelper MakeNew(void *newResult, std::string_view /*variation*/ = "nominal")
+   {
+      auto &result = *static_cast<std::shared_ptr<Result_t> *>(newResult);
+      result->Clear();
+      return RHistEngineFillHelper(result);
+   }
+
+   std::string GetActionName() { return "Hist"; }
+};
+#endif
 
 class R__CLING_PTRCHECK(off) FillTGraphHelper : public ROOT::Detail::RDF::RActionImpl<FillTGraphHelper> {
 public:
@@ -713,7 +893,7 @@ public:
    void InitTask(TTreeReader *, unsigned int) {}
 
    // no container arguments
-   template <typename... ValTypes, std::enable_if_t<!Disjunction<IsDataContainer<ValTypes>...>::value, int> = 0>
+   template <typename... ValTypes, std::enable_if_t<!std::disjunction<IsDataContainer<ValTypes>...>::value, int> = 0>
    void Exec(unsigned int slot, const ValTypes &...x)
    {
       const auto localSlot = slot % fObjects.size();
@@ -721,7 +901,7 @@ public:
    }
 
    // at least one container argument
-   template <typename... Xs, std::enable_if_t<Disjunction<IsDataContainer<Xs>...>::value, int> = 0>
+   template <typename... Xs, std::enable_if_t<std::disjunction<IsDataContainer<Xs>...>::value, int> = 0>
    void Exec(unsigned int slot, const Xs &...xs)
    {
       // array of bools keeping track of which inputs are containers
@@ -1314,6 +1494,43 @@ public:
       auto &result = *static_cast<std::shared_ptr<double> *>(newResult);
       return StdDevHelper(result, fCounts.size());
    }
+};
+
+class R__CLING_PTRCHECK(off) MedianHelper : public RActionImpl<MedianHelper> {
+   std::shared_ptr<double> fResult;
+   std::vector<std::vector<double>> fBuffers;
+
+public:
+   MedianHelper(const std::shared_ptr<double> &meanVPtr, const unsigned int nSlots);
+   MedianHelper(MedianHelper &&) = default;
+   MedianHelper &operator=(MedianHelper &&) = default;
+   MedianHelper(const MedianHelper &) = delete;
+   MedianHelper &operator=(const MedianHelper &other) = delete;
+
+   void InitTask(TTreeReader *, unsigned int) {}
+   void Exec(unsigned int slot, double v);
+
+   template <typename T, std::enable_if_t<IsDataContainer<T>::value, int> = 0>
+   void Exec(unsigned int slot, const T &vs)
+   {
+      fBuffers[slot].insert(fBuffers[slot].end(), std::begin(vs), std::end(vs));
+   }
+
+   void Initialize() { /* noop */ }
+
+   void Finalize();
+
+   std::string GetActionName() { return "Median"; }
+
+   std::shared_ptr<double> GetResultPtr() const { return fResult; }
+
+   MedianHelper MakeNew(void *newResult, std::string_view /*variation*/ = "nominal")
+   {
+      auto &result = *static_cast<std::shared_ptr<double> *>(newResult);
+      return MedianHelper(result, fBuffers.size());
+   }
+
+   ~MedianHelper() = default;
 };
 
 template <typename PrevNodeType>

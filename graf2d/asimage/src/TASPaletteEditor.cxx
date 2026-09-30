@@ -32,7 +32,8 @@ It is called by a pull down menu item of TASImage.
 #include "RConfigure.h"
 #include "TVirtualX.h"
 #include "strlcpy.h"
-#include "snprintf.h"
+
+#include <cstdio>
 
 #ifdef R__HAS_COCOA
 #   define X_DISPLAY_MISSING 1
@@ -45,8 +46,8 @@ It is called by a pull down menu item of TASImage.
 #ifndef WIN32
 #   include <afterbase.h>
 #else
-#   include <win32/config.h>
-#   include <win32/afterbase.h>
+#   define X_DISPLAY_MISSING 1
+#   include <afterbase.h>
 #endif
 #   include <afterimage.h>
 extern "C" {

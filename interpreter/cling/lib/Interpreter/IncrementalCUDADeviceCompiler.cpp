@@ -16,6 +16,7 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Lex/HeaderSearchOptions.h"
 
+#include "llvm/Config/llvm-config.h" // for LLVM_HAS_NVPTX_TARGET
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Program.h"
 #include "llvm/Support/raw_ostream.h"
@@ -60,7 +61,7 @@ namespace cling {
                 .append(std::to_string(m_CuArgs->smVersion)),
             "--cuda-device-only"};
 
-    addHeaderSearchPathFlags(argv, CI.getHeaderSearchOptsPtr());
+    addHeaderSearchPathFlags(argv, CI.getHeaderSearchOpts());
 
     if (m_CuArgs->verbose)
       argv.push_back("-v");
@@ -93,6 +94,7 @@ namespace cling {
       return;
     }
 
+#if LLVM_HAS_NVPTX_TARGET
     // initialize NVPTX backend
     LLVMInitializeNVPTXTargetInfo();
     LLVMInitializeNVPTXTarget();
@@ -100,6 +102,7 @@ namespace cling {
     LLVMInitializeNVPTXAsmPrinter();
 
     m_Init = true;
+#endif // LLVM_HAS_NVPTX_TARGET
   }
 
   void IncrementalCUDADeviceCompiler::setCuArgs(
@@ -193,9 +196,9 @@ namespace cling {
 
   void IncrementalCUDADeviceCompiler::addHeaderSearchPathFlags(
       std::vector<std::string>& argv,
-      const std::shared_ptr<clang::HeaderSearchOptions> &headerSearchOptions) {
+      const clang::HeaderSearchOptions& headerSearchOptions) {
     for (clang::HeaderSearchOptions::Entry e :
-         headerSearchOptions->UserEntries) {
+         headerSearchOptions.UserEntries) {
       if (e.Group == clang::frontend::IncludeDirGroup::Quoted) {
         argv.push_back("-iquote");
         argv.push_back(e.Path);

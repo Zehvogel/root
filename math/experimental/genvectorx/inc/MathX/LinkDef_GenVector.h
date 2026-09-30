@@ -1,7 +1,7 @@
 // @(#)root/mathcore:$Id$
 // Authors: W. Brown, M. Fischler, L. Moneta    2005
 
-#ifdef __CINT__
+#ifdef __CLING__
 
 #pragma link off all globals;
 #pragma link off all classes;
@@ -146,7 +146,7 @@
    "ROOT::Math::PositionVector3D<ROOT::Math::CylindricalEta3D<double> >";
 
 #ifdef __CLING__
-// Work around CINT and autoloader deficiency with template default parameter
+// Work around Cling and autoloader deficiency with template default parameter
 // Those requests are solely for rlibmap, they do no need to be seen by rootcint.
 #pragma link C++ class ROOT::Math::DisplacementVector3D < ROOT::Math::Cartesian3D < double>, \
    ROOT::Math::DefaultCoordinateSystemTag> +                                                 \
@@ -452,7 +452,7 @@
    "ROOT::Math::PositionVector3D<ROOT::Math::CylindricalEta3D<float> >";
 
 #ifdef __CLING__
-// Work around CINT and autoloader deficiency with template default parameter
+// Work around Cling and autoloader deficiency with template default parameter
 // Those requests are solely for rlibmap, they do no need to be seen by rootcint.
 #pragma link C++ class ROOT::Math::DisplacementVector3D < ROOT::Math::Cartesian3D < float>, \
    ROOT::Math::DefaultCoordinateSystemTag> +                                                \
@@ -669,7 +669,7 @@
 #pragma link C++ typedef ROOT::Math::RhoZPhiVector;
 #pragma link C++ typedef ROOT::Math::PxPyPzEVector;
 
-// tyoedef for floating types
+// typedef for floating types
 
 #pragma link C++ typedef ROOT::Math::XYVectorF;
 #pragma link C++ typedef ROOT::Math::Polar2DVectorF;

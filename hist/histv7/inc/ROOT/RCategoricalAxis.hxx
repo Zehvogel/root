@@ -8,9 +8,11 @@
 #include "RBinIndex.hxx"
 #include "RBinIndexRange.hxx"
 #include "RLinearizedIndex.hxx"
+#include "RSliceSpec.hxx"
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -69,8 +71,8 @@ public:
       }
    }
 
-   std::size_t GetNNormalBins() const { return fCategories.size(); }
-   std::size_t GetTotalNBins() const { return fEnableOverflowBin ? fCategories.size() + 1 : fCategories.size(); }
+   std::uint64_t GetNNormalBins() const { return fCategories.size(); }
+   std::uint64_t GetTotalNBins() const { return fEnableOverflowBin ? fCategories.size() + 1 : fCategories.size(); }
    const std::vector<std::string> &GetCategories() const { return fCategories; }
    bool HasOverflowBin() const { return fEnableOverflowBin; }
 
@@ -118,7 +120,7 @@ public:
          return {0, false};
       }
       assert(index.IsNormal());
-      std::size_t bin = index.GetIndex();
+      std::uint64_t bin = index.GetIndex();
       return {bin, bin < fCategories.size()};
    }
 
@@ -164,6 +166,31 @@ public:
    {
       return fEnableOverflowBin ? Internal::CreateBinIndexRange(RBinIndex(0), RBinIndex(), fCategories.size())
                                 : GetNormalRange();
+   }
+
+   /// Slice this axis according to the specification.
+   ///
+   /// A categorical axis cannot be sliced. The method will throw if a specification other than the default slice
+   /// operation is passed.
+   ///
+   /// \param[in] sliceSpec the slice specification
+   /// \return the sliced / copied axis
+   RCategoricalAxis Slice(const RSliceSpec &sliceSpec) const
+   {
+      if (sliceSpec.GetOperationSum() != nullptr) {
+         throw std::runtime_error("sum operation makes dimension disappear");
+      }
+
+      if (!sliceSpec.GetRange().IsInvalid()) {
+         throw std::runtime_error("slicing of RCategoricalAxis not implemented");
+      }
+      if (sliceSpec.GetOperationRebin() != nullptr) {
+         throw std::runtime_error("cannot rebin RCategoricalAxis");
+      }
+
+      // The sliced axis always has flow bins enabled, for symmetry with other axis types.
+      bool enableOverflowBin = true;
+      return RCategoricalAxis(fCategories, enableOverflowBin);
    }
 
    /// %ROOT Streamer function to throw when trying to store an object of this class.

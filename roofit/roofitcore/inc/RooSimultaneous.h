@@ -16,7 +16,6 @@
 #ifndef ROO_SIMULTANEOUS
 #define ROO_SIMULTANEOUS
 
-#include <RooAICRegistry.h>
 #include <RooAbsCacheElement.h>
 #include <RooAbsPdf.h>
 #include <RooArgList.h>
@@ -108,10 +107,15 @@ public:
 
   std::unique_ptr<RooAbsArg> compileForNormSet(RooArgSet const &normSet, RooFit::Detail::CompileContext & ctx) const override;
 
+  bool indexCatIsObservable(RooArgSet const &vars) const;
+
 protected:
 
   void selectNormalization(const RooArgSet* depSet=nullptr, bool force=false) override ;
   void selectNormalizationRange(const char* rangeName=nullptr, bool force=false) override ;
+
+  std::unique_ptr<RooAbsReal>
+  createAsymmetryComponent(const RooAbsCategoryLValue &asymCat, const RooAbsCategoryLValue &asymCatState) const override;
 
   RooArgSet const& flattenedCatList() const;
 

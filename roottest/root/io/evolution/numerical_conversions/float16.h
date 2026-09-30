@@ -3,7 +3,8 @@
 
 #include "TFile.h"
 #include "TMath.h"
-#include "Riostream.h"
+
+#include <iostream>
 
 class myclass {
 public:
@@ -230,7 +231,7 @@ bool readfile(const char *filename, Bool_t checkValue = kTRUE)
    }
 }
 
-#ifdef __MAKECINT__
+#ifdef __ROOTCLING__
 #pragma link C++ class myclass+;
 #pragma link C++ function readfile;
 #pragma link C++ function write;

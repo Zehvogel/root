@@ -9,6 +9,16 @@ if (runtime_cxxmodules AND WIN32)
   set (EXTRA_DICT_OPTS NO_CXXMODULE)
 endif()
 
+if (builtin_glu)
+  set(EXTRA_GL_LIBS tessglu)
+else ()
+  if (WIN32)
+    set(EXTRA_GL_LIBS Glu32.lib)
+  else()
+    set(EXTRA_GL_LIBS OpenGL::GLU)
+  endif()
+endif()
+
 ROOT_STANDARD_LIBRARY_PACKAGE(ROOTEve
   HEADERS
     ROOT/REveChunkManager.hxx
@@ -63,20 +73,11 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTEve
     ROOT/REveUtil.hxx
     ROOT/REveVector.hxx
     ROOT/REveViewer.hxx
+    ROOT/REveCamera.hxx
     ROOT/REveViewContext.hxx
     ROOT/REveVSD.hxx
     ROOT/REveVSDStructs.hxx
   SOURCES
-    glu/memalloc.c
-    glu/dict.c
-    glu/geom.c
-    glu/mesh.c
-    glu/priorityq.c
-    glu/normal.c
-    glu/render.c
-    glu/sweep.c
-    glu/tess.c
-    glu/tessmono.c
     src/REveChunkManager.cxx
     src/REveBox.cxx
     src/REveBoxSet.cxx
@@ -126,6 +127,7 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTEve
     src/REveUtil.cxx
     src/REveVector.cxx
     src/REveViewer.cxx
+    src/REveCamera.cxx
     src/REveVSD.cxx
     src/REveVSDStructs.cxx
   DEPENDENCIES
@@ -134,15 +136,21 @@ ROOT_STANDARD_LIBRARY_PACKAGE(ROOTEve
     Physics
     EG
     TreePlayer
-    RCsg
     ROOTWebDisplay
     ROOTBrowserv7
     ROOTGeomViewer
+  LIBRARIES
+    ROOTCsg
+    ${EXTRA_GL_LIBS}
   ${EXTRA_DICT_OPTS}
 )
 
 target_link_libraries(ROOTEve PUBLIC nlohmann_json::nlohmann_json)
-# this is required for glew
-target_include_directories(ROOTEve PRIVATE ${CMAKE_SOURCE_DIR}/graf3d/eve7)
+
+if (APPLE AND NOT builtin_glu)
+  set_source_files_properties(src/REveGluTess.cxx PROPERTIES COMPILE_DEFINITIONS "GL_SILENCE_DEPRECATION")
+elseif(bultin_glu)
+  set_source_files_properties(src/REveGluTess.cxx PROPERTIES COMPILE_DEFINITIONS "ROOT_BUILTIN_GLU")
+endif()
 
 ROOT_ADD_TEST_SUBDIRECTORY(test)

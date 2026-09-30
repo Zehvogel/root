@@ -107,10 +107,10 @@
  Interrupt; by clicking on the corresponding toolbar button, or by
  using Shift+F5 accelerator keys.
 
-#### Interface to CINT Interpreter
+#### Interface to Cling Interpreter
 
  Any command entered in the Command combo box will be passed to
- the CINT interpreter. This combo box will keep the commands history
+ the Cling interpreter. This combo box will keep the commands history
  and will allow you to re-execute the same commands during an editor
  session.
 
@@ -771,12 +771,11 @@ void TGTextEditor::CompileMacro()
       if (!SaveFileAs())
          return;
    }
-   char *tmpfile = gSystem->ConcatFileName(gSystem->TempDirectory(),
-                                gSystem->BaseName(fFilename.Data()));
+   TString temp = gSystem->BaseName(fFilename.Data());
+   const char *tmpfile = gSystem->PrependPathName(gSystem->TempDirectory(), temp);
    fTextEdit->SaveFile(tmpfile, kFALSE);
    gSystem->CompileMacro(tmpfile);
    gSystem->Unlink(tmpfile);
-   delete [] tmpfile;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

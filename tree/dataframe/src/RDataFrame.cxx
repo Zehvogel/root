@@ -87,6 +87,7 @@ You can directly see RDataFrame in action in our [tutorials](https://root.cern/d
    - [Adding a progress bar](\ref progressbar)
    - [Working with missing values in the dataset](\ref missing-values)
    - [Dealing with NaN or Inf values in the dataset](\ref special-values)
+   - [Translating TTree::Draw to RDataFrame](\ref rosetta-stone)
 - [Python interface](classROOT_1_1RDataFrame.html#python)
 - <a class="el" href="classROOT_1_1RDataFrame.html#reference" onclick="javascript:toggleInherit('pub_methods_classROOT_1_1RDF_1_1RInterface')">Class reference</a>
 
@@ -169,7 +170,7 @@ These operations do not modify the dataframe or book computations but simply ret
 | GetFilterNames() | Return the names of all filters in the computation graph. |
 | GetNRuns() | Return the number of event loops run by this RDataFrame instance so far. |
 | GetNSlots() | Return the number of processing slots that RDataFrame will use during the event loop (i.e. the concurrency level). |
-| SaveGraph() | Store the computation graph of an RDataFrame in [DOT format (graphviz)](https://en.wikipedia.org/wiki/DOT_(graph_description_language)) for easy inspection. See the [relevant section](\ref representgraph) for details. |
+| ROOT::RDF::SaveGraph() | Store the computation graph of an RDataFrame in [DOT format (graphviz)](https://en.wikipedia.org/wiki/DOT_(graph_description_language)) for easy inspection. See the [relevant section](\ref representgraph) for details. |
 
 \anchor rdf_intro
 ## Introduction
@@ -521,7 +522,7 @@ For example, to fill a histogram with the "pt" of selected particles for each ev
 
 ~~~{.cpp}
 // h is filled with all the elements of `good_pts`, for each event
-auto h = df.Define("good_pts", [](const ROOT::RVecF &pt) { return pt[pt > 0]; })
+auto h = df.Define("good_pts", [](const ROOT::RVecF &pt) { return pt[pt > 0]; }, {"pt"})
            .Histo1D("good_pts");
 ~~~
 
@@ -532,6 +533,8 @@ h = df.Define("good_pts", "pt[pt > 0]").Histo1D("good_pts")
 ~~~
 
 Learn more at ROOT::VecOps::RVec.
+
+ROOT provides convenience utility functions to work with RVec which are available in the [ROOT::VecOps namespace](\ref vecops)
 
 \anchor transformations
 ## Transformations: manipulating data
@@ -745,6 +748,7 @@ parts of the RDataFrame API currently work with this package. The subset that is
 - Min
 - Profile[1,2,3]D
 - Redefine
+- RedefinePerSample
 - Snapshot
 - Stats
 - StdDev
@@ -1201,6 +1205,14 @@ hx["pt:down"].Draw("SAME");
 hx["pt:up"].Draw("SAME");
 ~~~
 
+A shorter expression syntax is allowed for convenience (see the docs of the Vary overloads for more details):
+
+~~~{.cpp}
+auto nominal_hx =
+   df.Vary("pt", "{pt*0.9f, pt*1.1f}", {"down", "up"})
+// The rest is the same as above
+~~~
+
 A list of variation "tags" is passed as the last argument to Vary(). The tags give names to the varied values that are returned
 as elements of an RVec of the appropriate C++ type. The number of variation tags must correspond to the number of elements of
 this RVec (2 in the example above: the first element will correspond to the tag "down", the second
@@ -1263,11 +1275,30 @@ When Filters are employed, some variations might not pass the selection cuts (li
 In that case, RDataFrame will snapshot the filtered columns in a memory-efficient way by writing zero into the memory of fundamental types, or write a
 default-constructed object in case of classes. If none of the filters pass like in row 6, the entire event is omitted from the snapshot.
 
-To tell apart a genuine `0` (like `x` in row 0) from a variation that didn't pass the selection, RDataFrame writes a bitmask for each event, indicating which variations
-are valid (see last column). A mapping of column names to this bitmask is placed in the same file as the output dataset, and automatically loaded when
-RDataFrame opens a file that was snapshot with variations.
-Attempting to read such missing values with RDataFrame will produce an error, but RDataFrame can either skip these values or fill in defaults as
-described in the \ref missing-values "section on dealing with missing values".
+To tell apart a genuine `0` (like `x` in row 0) from a case where nominal or variation didn't pass a selection,
+RDataFrame writes a bitmask for each event, see last column of the table above. Every bit indicates whether its
+associated columns are valid. The bitmask is implemented as a 64-bit `std::bitset` in memory, written to the output
+dataset as a `std::uin64_t`. For every 64 columns, a new bitmask column is added to the output dataset.
+
+For each column that gets varied, the nominal and all variation columns are each assigned a bit to denote whether their
+entries are valid. A mapping of column names to the corresponding bitmask is placed in the same file as the output
+dataset, with a name that follows the pattern `"R_rdf_column_to_bitmask_mapping_<NAME_OF_THE_DATASET>"`. It is of type
+`std::unordered_map<std::string, std::pair<std::string, unsigned int>>`, and maps a column name to the name of the
+bitmask column and the index of the relevant bit. For example, in the same file as the dataset "Events" there would be
+an object named `R_rdf_column_to_bitmask_mapping_Events`. This object for example would describe a connection such as:
+
+~~~
+muon_pt --> (R_rdf_mask_Events_0, 42)
+~~~
+
+which means that the validity of the entries in `muon_pt` is established by the bit `42` in the bitmask found in the
+column `R_rdf_mask_Events_0`.
+
+When RDataFrame opens a file, it checks for the existence of this mapping between columns and bitmasks, and loads it automatically if found. As such,
+RDataFrame makes the treatment of the various bitmap maskings completely transparent to the user.
+
+In case certain values are labeled invalid by the corresponding bit, this will result in reading a missing value. The semantics of such a scenario follow the
+rules described in the \ref missing-values "section on dealing with missing values" and can be dealt with accordingly.
 
 \note Snapshot with variations is currently restricted to single-threaded TTree snapshots.
 
@@ -1314,6 +1345,13 @@ all_hs.GetKeys(); // returns {"nominal", "pt:down", "pt:up", "eta:0", "eta:1"}
 Note how we passed the integer `2` instead of a list of variation tags to the second Vary() invocation: this is a
 shorthand that automatically generates tags 0 to N-1 (in this case 0 and 1).
 
+#### Note on memory management of objects corresponding to variations
+
+When calling \ref ROOT::RDF::Experimental::VariationsFor "VariationsFor()", the nominal value held by the input
+RResultPtr is copied N times (one per variation) to create the corresponding varied values. As a consequence, if the
+action being run takes an input user value which may be modified in place, e.g.
+\ref Hist(std::shared_ptr<ROOT::Experimental::RHistEngine<BinContentType>>, const ColumnNames_t &),
+the nominal value will be the user-provided one, whereas the varied values will be fresh copies.
 
 \anchor rnode
 ### RDataFrame objects as function arguments and return values
@@ -1779,6 +1817,9 @@ more of its entries. For example:
 - When joining different datasets horizontally according to some index value
   (e.g. the event number), if the index does not find a match in one or more
   other datasets for a certain entry.
+- If, for a certain event, a column is invalid because it results from a Snapshot
+  with systematic variations, and that variation didn't pass its filters. For
+  more details, see \ref snapshot-with-variations.
 
 For example, suppose that column "y" does not have a value for entry 42:
 
@@ -1916,7 +1957,8 @@ Non-finite numbers can be suppressed using Filter(), e.g.:
 df.Filter("std::isfinite(x)").Mean("x")
 \endcode
 
-### Translating TTree::Draw to RDataFrame 
+\anchor rosetta-stone
+### Translating TTree commands to RDataFrame
 
 <table>
 <tr>
@@ -1965,8 +2007,7 @@ tree->Draw("event.GetNtrack()");
    </td>
    <td>
 ~~~{cpp}
-auto df1 = df.Define("NTrack","event.GetNtrack()");
-df1.Histo1D("NTrack")->Draw();
+df.Define("NTrack","event.GetNtrack()").Histo1D("NTrack")->Draw();
 ~~~
    </td>
 </tr>
@@ -2003,19 +2044,16 @@ df.Define("good_pt", "Muon_pt[Muon_pt > 100]").Histo1D("good_pt")->Draw();
    <td>
 ~~~{cpp}
 // Draw the histogram and fill hnew with it
-tree->Draw("sqrt(x)>>hnew","y>0"); 
+tree->Draw("sqrt(x)>>hnew","y>0");
 
 // Retrieve hnew from the current directory
-TH1F *hnew = (TH1F*)gDirectory->Get("hnew");
-
-// Retrieve hnew from the current Pad
-TH1F *hnew = (TH1F*)gPad->GetPrimitive("hnew");
+auto hnew = gDirectory->Get<TH1F>("hnew");
 ~~~
    </td>
    <td>
 ~~~{cpp}
 // We pass histogram constructor arguments to the Histo1D operation, to easily give the histogram a name
-auto hist = df.Filter("y>0").Histo1D({"hnew","hnew",10, 0, 10},"x");
+auto hist = df.Define("sqrt_x", "sqrt(x)").Filter("y>0").Histo1D({"hnew","hnew", 10, 0, 10}, "sqrt_x");
 ~~~
    </td>
 </tr>
@@ -2033,10 +2071,10 @@ tree->Draw("z:y:x","","prof");
 ~~~{cpp}
 
 // Draw a 1D Profile histogram
-auto profile1D = df.Profile1D("x", "y");
+df.Profile1D("x", "y")->Draw();
 
 // Draw a 2D Profile histogram
-auto profile2D = df.Profile2D("x", "y", "z");
+df.Profile2D("x", "y", "z")->Draw();
 ~~~
    </td>
 </tr>
@@ -2050,39 +2088,74 @@ tree->Draw("x", "","", 2, 5);
    <td>
 ~~~{cpp}
 // Range function with arguments begin, end
-auto histo_range = df.Range(5,7).Histo1D<int>("x");
-histo_range->Draw();
+df.Range(5,7).Histo1D("x")->Draw();
 ~~~
    </td>
 </tr>
 <tr>
    <td>
 ~~~{cpp}
-// Draw the X() component of the 
+// Draw the X() component of the
 // ROOT::Math::DisplacementVector3D in vec_list
 tree->Draw("vec_list.X()");
 ~~~
    </td>
    <td>
 ~~~{cpp}
-auto histo = df.Define("x", "ROOT::RVecD out; for(const auto &el: vec_list) out.push_back(el.X()); return out;").Histo1D("x");
-histo->Draw();
+df.Define("x", "ROOT::RVecD out; for(const auto &el: vec_list) out.push_back(el.X()); return out;").Histo1D("x")->Draw();
 ~~~
    </td>
 </tr>
 <tr>
    <td>
 ~~~{cpp}
-// Gather all values from a branch holding a collection per event, `pt`, 
-// and fill a histogram so that we can count the total number of values across all events 
+// Gather all values from a branch holding a collection per event, `pt`,
+// and fill a histogram so that we can count the total number of values across all events
 tree->Draw("pt>>histo");
-TH1D *histo = (TH1D *)gDirectory->Get("histo");
+auto histo = gDirectory->Get<TH1D>("histo");
 histo->GetEntries();
 ~~~
    </td>
    <td>
 ~~~{cpp}
 df.Histo1D("pt")->GetEntries();
+~~~
+   </td>
+</tr>
+<tr>
+   <td>
+      <b>TTree::Scan()</b>
+   </td>
+   <td>
+      <b>ROOT::RDataFrame</b>
+   </td>
+</tr>
+<tr>
+   <td>
+~~~{cpp}
+// Print a table of the first 10 entries for all variables in the Tree
+// if the first entry in the Muon_pt collection is > 10.
+tree->Scan("*", "Muon_pt[0] > 10.", "", 10);
+~~~
+   </td>
+   <td>
+~~~{cpp}
+// Selecting columns using a regular expression
+df.Filter("Muon_pt[0] > 10.").Display(".*", 10)->Print();
+~~~
+   </td>
+</tr>
+<tr>
+   <td>
+~~~{cpp}
+// For 10 events, print Muon_pt and Muon_eta, starting at entry 100
+tree->Scan("Muon_pt:Muon_eta", "", "", 10, 100);
+~~~
+   </td>
+   <td>
+~~~{cpp}
+// Selecting columns using a collection of names
+df.Range(100, 0).Display({"Muon_pt", "Muon_eta"}, 10)->Print();
 ~~~
    </td>
 </tr>
@@ -2206,17 +2279,6 @@ RDataFrame::RDataFrame(std::unique_ptr<ROOT::RDF::RDataSource> ds, const ColumnN
 RDataFrame::RDataFrame(ROOT::RDF::Experimental::RDatasetSpec spec)
    : RInterface(std::make_shared<RDFDetail::RLoopManager>(std::move(spec)))
 {
-}
-
-RDataFrame::~RDataFrame()
-{
-   // If any node of the computation graph associated with this RDataFrame
-   // declared code to jit, we need to make sure the compilation actually
-   // happens. For example, a jitted Define could have been booked but
-   // if the computation graph is not actually run then the code of the
-   // Define node is not jitted. This in turn would cause memory leaks.
-   // See https://github.com/root-project/root/issues/15399
-   fLoopManager->Jit();
 }
 
 namespace RDF {

@@ -139,24 +139,27 @@ namespace cling {
                                             m_Module, m_CodeGen, name));
     std::string differences = "";
     // Ignore the builtins
-    llvm::SmallVector<llvm::StringRef, 1024> builtinNames;
+    llvm::SmallVector<std::string, 1024> builtinNames;
     const clang::Builtin::Context& BuiltinCtx = m_ASTContext.BuiltinInfo;
     for (auto i = clang::Builtin::NotBuiltin+1;
          i != clang::Builtin::FirstTSBuiltin; ++i) {
-      llvm::StringRef Name(BuiltinCtx.getName(i));
-      if (Name.starts_with("__builtin"))
-        builtinNames.emplace_back(Name);
+      std::string Name = BuiltinCtx.getName(i);
+      if (Name.rfind("__builtin", 0) == 0)
+        builtinNames.emplace_back(std::move(Name));
     }
 
-    for (auto&& BuiltinInfo: m_ASTContext.getTargetInfo().getTargetBuiltins()) {
-      llvm::StringRef Name(BuiltinInfo.Name);
-      if (!Name.starts_with("__builtin"))
-        builtinNames.emplace_back(Name);
+    for (const auto& Shard : m_ASTContext.getTargetInfo().getTargetBuiltins()) {
+      for (const auto& BuiltinInfo : Shard.Infos) {
+        std::string Name = BuiltinInfo.getName(Shard);
+        if (Name.rfind("__builtin", 0) != 0)
+          builtinNames.emplace_back(std::move(Name));
 #ifndef NDEBUG
-      else // Make sure it's already in the list
-        assert(std::find(builtinNames.begin(), builtinNames.end(),
-                         Name) == builtinNames.end() && "Not in list!");
+        else // Make sure it's already in the list
+          assert(std::find(builtinNames.begin(), builtinNames.end(), Name) ==
+                     builtinNames.end() &&
+                 "Not in list!");
 #endif
+      }
     }
 
     builtinNames.push_back(".*__builtin.*");
@@ -168,7 +171,7 @@ namespace cling {
                      "lookup tables", verbose, &builtinNames);
 
     // We create a virtual file for each input line in the format input_line_N.
-    llvm::SmallVector<llvm::StringRef, 2> input_lines;
+    llvm::SmallVector<std::string, 2> input_lines;
     input_lines.push_back("input_line_[0-9].*");
     differentContent(m_IncludedFilesFile, m_DiffPair->m_IncludedFilesFile,
                      "included files", verbose, &input_lines);
@@ -195,11 +198,11 @@ namespace cling {
                                             const std::string& file2,
                                             const char* type,
                                             bool verbose,
-            const llvm::SmallVectorImpl<llvm::StringRef>* ignores/*=0*/) const {
+            const llvm::SmallVectorImpl<std::string>* ignores/*=0*/) const {
 
     std::string diffCall = m_DiffCommand;
     if (ignores) {
-      for (const llvm::StringRef& ignore : *ignores) {
+      for (const std::string& ignore : *ignores) {
         diffCall += " --ignore-matching-lines=\".*";
         diffCall += ignore;
         diffCall += ".*\"";
@@ -256,7 +259,7 @@ namespace cling {
                                               const SourceManager& SM) {
     // FileInfos are stored as a mapping, and invalidating the cache
     // can change iteration order.
-    std::vector<std::string> ParsedOpen, Parsed, AST;
+    std::vector<std::string> Parsed, AST;
     for (clang::SourceManager::fileinfo_iterator I = SM.fileinfo_begin(),
            E = SM.fileinfo_end(); I != E; ++I) {
       const clang::FileEntryRef FE = I->first;
@@ -273,15 +276,7 @@ namespace cling {
         if (I->second->getBufferDataIfLoaded()) {
           // There is content - a memory buffer or a file.
           // We know it's a file because we started off the FileEntry.
-
-          // FIXME: LLVM will completely migrate to FileEntryRef.
-          // We added `isOpen()` in our commit:
-          // `Accessor to "is file opened"; this is crucial info for us.`
-          // Move this logic to FileEntryRef or have a workaround.
-          if (FE.getFileEntry().isOpen())
-            ParsedOpen.emplace_back(std::move(fileName));
-          else
-            Parsed.emplace_back(std::move(fileName));
+          Parsed.emplace_back(std::move(fileName));
         } else
          AST.emplace_back(std::move(fileName));
       }
@@ -294,7 +289,6 @@ namespace cling {
       for (auto&& FileName : Files)
         Out << " " << FileName << '\n';
     };
-    DumpFiles("Parsed and open", ParsedOpen);
     DumpFiles("Parsed", Parsed);
     DumpFiles("From AST file", AST);
   }
